@@ -20,6 +20,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.components.AddClientDialog
 import com.example.components.BottomNavBar
 import com.example.components.BottomNavDestination
 import com.example.components.CreateBottomSheet
@@ -41,6 +42,7 @@ import com.example.screens.ProjectsScreen
 import com.example.screens.ScheduleMessageScreen
 import com.example.screens.SearchScreen
 import com.example.screens.SettingsScreen
+import com.example.screens.SignUpScreen
 import com.example.screens.SplashScreen
 import com.example.screens.TimezonesScreen
 import com.example.model.AttachmentType
@@ -54,15 +56,30 @@ fun GlobalChatNavGraph(
     navController: NavHostController = rememberNavController()
 ) {
     var isCreateSheetOpen by remember { mutableStateOf(false) }
+    var isAddClientDialogOpen by remember { mutableStateOf(false) }
     var currentBottomTab by remember { mutableStateOf(BottomNavDestination.HOME) }
     val isDebugDialogOpen by viewModel.isDebugDialogOpen.collectAsState()
     val chatDraft by viewModel.chatDraft.collectAsState()
     val activeClientId by viewModel.activeChatClientId.collectAsState()
 
+    val currentUser by viewModel.currentUser.collectAsState()
+    val initialRoute = remember { if (viewModel.isUserAuthenticated) Screen.Main.route else Screen.Login.route }
+
+    androidx.compose.runtime.LaunchedEffect(currentUser) {
+        if (currentUser == null) {
+            val currentRoute = navController.currentDestination?.route
+            if (currentRoute != null && currentRoute != Screen.Login.route && currentRoute != Screen.SignUp.route && currentRoute != Screen.Splash.route) {
+                navController.navigate(Screen.Login.route) {
+                    popUpTo(0) { inclusive = true }
+                }
+            }
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         NavHost(
             navController = navController,
-            startDestination = Screen.Main.route,
+            startDestination = initialRoute,
             enterTransition = { EnterTransition.None },
             exitTransition = { ExitTransition.None }
         ) {
@@ -80,6 +97,7 @@ fun GlobalChatNavGraph(
             // Screen 2: Login
             composable(Screen.Login.route) {
                 LoginScreen(
+                    viewModel = viewModel,
                     onSignInSuccess = {
                         navController.navigate(Screen.Main.route) {
                             popUpTo(Screen.Login.route) { inclusive = true }
@@ -87,6 +105,29 @@ fun GlobalChatNavGraph(
                     },
                     onBack = {
                         navController.popBackStack()
+                    },
+                    onNavigateToSignUp = {
+                        navController.navigate(Screen.SignUp.route)
+                    }
+                )
+            }
+
+            // Screen 2b: Sign Up
+            composable(Screen.SignUp.route) {
+                SignUpScreen(
+                    viewModel = viewModel,
+                    onSignUpSuccess = {
+                        navController.navigate(Screen.Main.route) {
+                            popUpTo(Screen.SignUp.route) { inclusive = true }
+                        }
+                    },
+                    onBack = {
+                        navController.popBackStack()
+                    },
+                    onNavigateToLogin = {
+                        navController.navigate(Screen.Login.route) {
+                            popUpTo(Screen.SignUp.route) { inclusive = true }
+                        }
                     }
                 )
             }
@@ -127,13 +168,38 @@ fun GlobalChatNavGraph(
                                 }
                             },
                             onPlusClick = {
-                                isCreateSheetOpen = true
+                                // Handled natively by BottomNavBar morph container
                             },
                             onSearchClick = {
                                 navController.navigate(Screen.Search.route)
                             },
+                            onConfirmAddClient = { username, onError, onSuccess ->
+                                viewModel.addClientByUsername(
+                                    username = username,
+                                    onError = onError,
+                                    onSuccess = { clientUid ->
+                                        viewModel.setActiveChatClient(clientUid)
+                                        onSuccess(clientUid)
+                                        activeChatConversationId = clientUid
+                                        currentBottomTab = BottomNavDestination.CHAT
+                                    }
+                                )
+                            },
                             onActionPillClick = { actionId ->
-                                if (actionId.startsWith("project_created:")) {
+                                if (actionId == "add_client") {
+                                    isAddClientDialogOpen = true
+                                } else if (actionId.startsWith("open_chat:")) {
+                                    val clientId = actionId.removePrefix("open_chat:")
+                                    viewModel.setActiveChatClient(clientId)
+                                    activeChatConversationId = clientId
+                                    currentBottomTab = BottomNavDestination.CHAT
+                                } else if (actionId.startsWith("open_project:")) {
+                                    val projectId = actionId.removePrefix("open_project:")
+                                    navController.navigate(Screen.ProjectDetails.createRoute(projectId))
+                                } else if (actionId.startsWith("open_schedule:")) {
+                                    val clientId = actionId.removePrefix("open_schedule:")
+                                    navController.navigate(Screen.ScheduleMessage.createRoute(clientId))
+                                } else if (actionId.startsWith("project_created:")) {
                                     val payload = actionId.removePrefix("project_created:")
                                     val parts = payload.split(":")
                                     val projName = parts.getOrNull(0)?.ifBlank { "New Project" } ?: "New Project"
@@ -277,10 +343,9 @@ fun GlobalChatNavGraph(
                         )
                     }
                 ) { innerPadding ->
+                    val bottomPadding = innerPadding.calculateBottomPadding()
                     Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(bottom = innerPadding.calculateBottomPadding())
+                        modifier = Modifier.fillMaxSize()
                     ) {
                         when (currentBottomTab) {
                             BottomNavDestination.HOME -> {
@@ -318,7 +383,8 @@ fun GlobalChatNavGraph(
                                         onOpenClientDetails = { cId ->
                                             navController.navigate(Screen.ClientDetails.createRoute(cId))
                                         },
-                                        showInternalComposer = false
+                                        showInternalComposer = false,
+                                        bottomContentPadding = bottomPadding
                                     )
                                 } else {
                                     InboxScreen(
@@ -345,7 +411,12 @@ fun GlobalChatNavGraph(
                             BottomNavDestination.ACCOUNT -> {
                                 SettingsScreen(
                                     viewModel = viewModel,
-                                    onBack = { currentBottomTab = BottomNavDestination.HOME }
+                                    onBack = { currentBottomTab = BottomNavDestination.HOME },
+                                    onSignOut = {
+                                        navController.navigate(Screen.Login.route) {
+                                            popUpTo(0) { inclusive = true }
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -380,10 +451,20 @@ fun GlobalChatNavGraph(
                                 }
                             },
                             onPlusClick = {
-                                isCreateSheetOpen = true
+                                // Handled natively by BottomNavBar morph container
                             },
                             onSearchClick = {
                                 navController.navigate(Screen.Search.route)
+                            },
+                            onConfirmAddClient = { username, onError, onSuccess ->
+                                viewModel.addClientByUsername(
+                                    username = username,
+                                    onError = onError,
+                                    onSuccess = { clientUid ->
+                                        viewModel.setActiveChatClient(clientUid)
+                                        onSuccess(clientUid)
+                                    }
+                                )
                             },
                             onActionPillClick = { actionId ->
                                 if (actionId.startsWith("project_created:")) {
@@ -530,7 +611,7 @@ fun GlobalChatNavGraph(
                         )
                     }
                 ) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding)) {
+                    Box(modifier = Modifier.fillMaxSize()) {
                         ChatScreen(
                             clientId = clientId,
                             viewModel = viewModel,
@@ -538,7 +619,8 @@ fun GlobalChatNavGraph(
                             onOpenClientDetails = { cId ->
                                 navController.navigate(Screen.ClientDetails.createRoute(cId))
                             },
-                            showInternalComposer = false
+                            showInternalComposer = false,
+                            bottomContentPadding = innerPadding.calculateBottomPadding()
                         )
                     }
                 }
@@ -669,6 +751,9 @@ fun GlobalChatNavGraph(
                 onNewChat = {
                     navController.navigate(Screen.Chat.createRoute("c1"))
                 },
+                onAddClient = {
+                    isAddClientDialogOpen = true
+                },
                 onNewProject = {
                     navController.navigate(Screen.ProjectDetails.createRoute("p1"))
                 },
@@ -677,6 +762,23 @@ fun GlobalChatNavGraph(
                 }
             )
         }
+
+        // Add Client Dialog with Username Lookup
+        AddClientDialog(
+            isOpen = isAddClientDialogOpen,
+            onDismiss = { isAddClientDialogOpen = false },
+            onConfirmAdd = { username, onError, onSuccess ->
+                viewModel.addClientByUsername(
+                    username = username,
+                    onError = onError,
+                    onSuccess = { clientUid ->
+                        viewModel.setActiveChatClient(clientUid)
+                        onSuccess(clientUid)
+                        navController.navigate(Screen.Chat.createRoute(clientUid))
+                    }
+                )
+            }
+        )
 
         // Debug-only Showcase Inspector Dialog
         ShowcaseDebugDialog(

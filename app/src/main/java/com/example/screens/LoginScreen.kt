@@ -53,17 +53,22 @@ import androidx.compose.ui.unit.sp
 import com.example.components.WisePillButton
 import com.example.ui.theme.GlobalChatTheme
 import com.example.ui.theme.NearBlack
+import com.example.viewmodel.GlobalChatViewModel
 
 @Composable
 fun LoginScreen(
     onSignInSuccess: () -> Unit,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    onNavigateToSignUp: () -> Unit = {},
+    modifier: Modifier = Modifier,
+    viewModel: GlobalChatViewModel? = null
 ) {
     val colors = GlobalChatTheme.colors
-    var email by remember { mutableStateOf("alex@freelance.com") }
-    var password by remember { mutableStateOf("••••••••••••") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -189,10 +194,44 @@ fun LoginScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage!!,
+                        fontSize = 13.sp,
+                        color = Color(0xFFD03238),
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    )
+                }
+
                 // Sign In Button
                 WisePillButton(
-                    text = "Sign In",
-                    onClick = onSignInSuccess,
+                    text = if (isLoading) "Signing in..." else "Sign In",
+                    onClick = {
+                        if (!isLoading) {
+                            if (viewModel != null) {
+                                isLoading = true
+                                errorMessage = null
+                                viewModel.signInWithEmail(
+                                    emailStr = email,
+                                    passStr = password,
+                                    onSuccess = {
+                                        isLoading = false
+                                        onSignInSuccess()
+                                    },
+                                    onError = { err ->
+                                        isLoading = false
+                                        errorMessage = err
+                                    }
+                                )
+                            } else {
+                                onSignInSuccess()
+                            }
+                        }
+                    },
                     isPrimary = true,
                     modifier = Modifier.fillMaxWidth(),
                     testTag = "login_submit_button"
@@ -315,7 +354,9 @@ fun LoginScreen(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = colors.textPrimary,
-                    modifier = Modifier.clickable { onSignInSuccess() }
+                    modifier = Modifier.clickable {
+                        onNavigateToSignUp()
+                    }
                 )
             }
         }

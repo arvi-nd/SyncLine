@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "GlobalChat"
+rootProject.name = "SyncLine"
 
 include(":app")

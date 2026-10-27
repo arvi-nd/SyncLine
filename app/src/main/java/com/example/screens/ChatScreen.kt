@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -98,7 +100,8 @@ fun ChatScreen(
     onBack: () -> Unit,
     onOpenClientDetails: (String) -> Unit,
     modifier: Modifier = Modifier,
-    showInternalComposer: Boolean = false
+    showInternalComposer: Boolean = false,
+    bottomContentPadding: Dp = 100.dp
 ) {
     val colors = GlobalChatTheme.colors
     val client = viewModel.getClient(clientId) ?: return
@@ -208,6 +211,7 @@ fun ChatScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(bottom = bottomContentPadding + 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(messages, key = { it.id }) { msg ->

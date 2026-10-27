@@ -208,7 +208,7 @@ fun InboxScreen(
                     .padding(horizontal = 16.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
                     top = 12.dp,
-                    bottom = 16.dp
+                    bottom = 120.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {

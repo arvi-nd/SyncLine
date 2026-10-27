@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.Brightness4
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.automirrored.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Lock
@@ -50,6 +51,7 @@ import com.example.viewmodel.GlobalChatViewModel
 fun SettingsScreen(
     viewModel: GlobalChatViewModel,
     onBack: (() -> Unit)? = null,
+    onSignOut: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
@@ -95,6 +97,20 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            val currentUser by viewModel.currentUser.collectAsState()
+            val userProfile by viewModel.userProfile.collectAsState()
+
+            val emailText = userProfile?.email?.takeIf { it.isNotBlank() }
+                ?: currentUser?.email
+                ?: "Not signed in"
+
+            val nameText = userProfile?.displayName?.takeIf { it.isNotBlank() }
+                ?: currentUser?.displayName?.takeIf { it.isNotBlank() }
+                ?: currentUser?.email?.substringBefore("@")?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                ?: "User Account"
+
+            val initialText = nameText.take(2).uppercase()
+
             // Profile Card
             WiseCard(
                 cornerRadius = 24.dp,
@@ -105,35 +121,37 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     WiseAvatar(
-                        name = "Alex Carter",
-                        initial = "AC",
+                        name = nameText,
+                        initial = initialText,
                         backgroundColor = Color(0xFFC7E2FE),
                         size = 56.dp,
-                        isOnline = true
+                        isOnline = currentUser != null
                     )
 
                     Spacer(modifier = Modifier.width(16.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Alex Carter",
+                            text = nameText,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = colors.textPrimary
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "alex@freelance.com",
+                            text = emailText,
                             fontSize = 13.sp,
                             color = colors.textSecondary
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Edit profile",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.brandLime
-                        )
+                        if (currentUser != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Authenticated with Firebase",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colors.brandLime
+                            )
+                        }
                     }
 
                     Icon(
@@ -207,6 +225,17 @@ fun SettingsScreen(
                         icon = Icons.Outlined.HelpOutline,
                         title = "Help & Support",
                         onClick = { }
+                    )
+
+                    SettingsRowItem(
+                        icon = Icons.AutoMirrored.Outlined.ExitToApp,
+                        title = "Sign Out",
+                        onClick = {
+                            viewModel.signOut {
+                                onSignOut?.invoke()
+                            }
+                        },
+                        testTag = "settings_row_sign_out"
                     )
                 }
             }

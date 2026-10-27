@@ -1,5 +1,5 @@
 {
-  "name": "GlobalChat",
+  "name": "SyncLine",
   "description": "Global freelancer messaging, projects, scheduling, and timezone workspace inspired by Wise.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

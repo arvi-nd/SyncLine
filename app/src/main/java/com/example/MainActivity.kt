@@ -1,5 +1,6 @@
 package com.example
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,6 +22,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        unlockHighRefreshRate()
         enableEdgeToEdge()
         setContent {
             val isDark by viewModel.isDarkTheme.collectAsState()
@@ -33,6 +35,51 @@ class MainActivity : ComponentActivity() {
                     GlobalChatNavGraph(viewModel = viewModel)
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        unlockHighRefreshRate()
+    }
+
+    private fun unlockHighRefreshRate() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val display = window.context.display
+                val supportedModes = display?.supportedModes ?: emptyArray()
+                val maxMode = supportedModes.maxByOrNull { it.refreshRate }
+                val params = window.attributes
+                if (maxMode != null && maxMode.modeId != 0) {
+                    params.preferredDisplayModeId = maxMode.modeId
+                }
+                if (maxMode != null && maxMode.refreshRate > 0f) {
+                    params.preferredRefreshRate = maxMode.refreshRate
+                } else {
+                    params.preferredRefreshRate = 120f
+                }
+                window.attributes = params
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                @Suppress("DEPRECATION")
+                val display = window.windowManager.defaultDisplay
+                @Suppress("DEPRECATION")
+                val supportedModes = display?.supportedModes ?: emptyArray()
+                val maxMode = supportedModes.maxByOrNull { it.refreshRate }
+                val params = window.attributes
+                if (maxMode != null && maxMode.modeId != 0) {
+                    params.preferredDisplayModeId = maxMode.modeId
+                }
+                if (maxMode != null && maxMode.refreshRate > 0f) {
+                    @Suppress("DEPRECATION")
+                    params.preferredRefreshRate = maxMode.refreshRate
+                } else {
+                    @Suppress("DEPRECATION")
+                    params.preferredRefreshRate = 120f
+                }
+                window.attributes = params
+            }
+        } catch (_: Exception) {
+            // Fallback gracefully
         }
     }
 }

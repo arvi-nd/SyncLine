@@ -67,7 +67,9 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import kotlinx.coroutines.delay
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.CalendarToday
@@ -81,14 +83,19 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Movie
 import androidx.compose.material.icons.outlined.OndemandVideo
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.PersonPin
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.WorkOutline
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -148,6 +155,7 @@ fun BottomNavBar(
     onChatTextChange: (String) -> Unit = {},
     onSendMessage: () -> Unit = {},
     onActionPillClick: (String) -> Unit = {},
+    onConfirmAddClient: (username: String, onError: (String) -> Unit, onSuccess: (clientUid: String) -> Unit) -> Unit = { _, _, _ -> },
     clientName: String = "Sarah Jenkins"
 ) {
     val colors = GlobalChatTheme.colors
@@ -183,7 +191,7 @@ fun BottomNavBar(
         lastActivePillMode = expandedPillMode!!
     }
 
-    if (!isChatMode && expandedPillMode != null && expandedPillMode != "search") {
+    if (!isChatMode && expandedPillMode != null && expandedPillMode != "search" && expandedPillMode != "create" && expandedPillMode != "add_client") {
         expandedPillMode = null
     }
 
@@ -193,6 +201,7 @@ fun BottomNavBar(
             "create_project" -> expandedPillMode = "project"
             "new_meeting" -> expandedPillMode = "schedule"
             "past_invoices" -> expandedPillMode = "invoice"
+            "add_client" -> expandedPillMode = "create"
             else -> expandedPillMode = null
         }
     }
@@ -228,6 +237,8 @@ fun BottomNavBar(
             searchResultCount == 4 -> 480.dp
             else -> 545.dp
         }
+        expandedPillMode == "create" -> 160.dp
+        expandedPillMode == "add_client" -> 218.dp
         isChatMode && (expandedPillMode == "invoice" || expandedPillMode == "create_project") -> 630.dp
         isChatMode && expandedPillMode == "new_meeting" -> 490.dp
         isChatMode && expandedPillMode == "past_invoices" -> 440.dp
@@ -247,6 +258,8 @@ fun BottomNavBar(
             searchResultCount == 4 -> 420.dp
             else -> 485.dp
         }
+        expandedPillMode == "create" -> 100.dp
+        expandedPillMode == "add_client" -> 158.dp
         isChatMode && (expandedPillMode == "invoice" || expandedPillMode == "create_project") -> 570.dp
         isChatMode && expandedPillMode == "new_meeting" -> 430.dp
         isChatMode && expandedPillMode == "past_invoices" -> 380.dp
@@ -270,15 +283,15 @@ fun BottomNavBar(
     )
 
     val navRowOffsetY by animateDpAsState(
-        targetValue = if (isChatMode) 80.dp else 0.dp,
+        targetValue = if (isChatMode || expandedPillMode != null) 80.dp else 0.dp,
         animationSpec = appleSpring,
         label = "nav_row_offset_y"
     )
 
     val navRowAlpha by animateFloatAsState(
-        targetValue = if (isChatMode) 0f else 1f,
+        targetValue = if (isChatMode || expandedPillMode != null) 0f else 1f,
         animationSpec = tween(
-            durationMillis = if (isChatMode) 180 else 240,
+            durationMillis = if (isChatMode || expandedPillMode != null) 180 else 240,
             easing = FastOutSlowInEasing
         ),
         label = "nav_row_alpha"
@@ -321,44 +334,74 @@ fun BottomNavBar(
                 modifier = Modifier
                     .fillMaxSize()
                     .drawWithContent {
-                        val glowWidth = 38.dp.toPx()
-                        val sideGlowColor = if (colors.isDark) {
-                            WiseLime.copy(alpha = 0.16f)
+                        val glowDepth = 24.dp.toPx()
+                        val subtleGlowColor = if (colors.isDark) {
+                            WiseLime.copy(alpha = 0.05f)
                         } else {
-                            WiseLime.copy(alpha = 0.22f)
+                            WiseLime.copy(alpha = 0.07f)
                         }
 
-                        // Left side inner glow (fading from left curved edge inward)
+                        // Top side inner glow
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    subtleGlowColor,
+                                    subtleGlowColor.copy(alpha = subtleGlowColor.alpha * 0.35f),
+                                    Color.Transparent
+                                ),
+                                startY = 0f,
+                                endY = glowDepth
+                            ),
+                            topLeft = Offset(0f, 0f),
+                            size = Size(size.width, glowDepth)
+                        )
+
+                        // Bottom side inner glow
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    subtleGlowColor.copy(alpha = subtleGlowColor.alpha * 0.35f),
+                                    subtleGlowColor
+                                ),
+                                startY = size.height - glowDepth,
+                                endY = size.height
+                            ),
+                            topLeft = Offset(0f, size.height - glowDepth),
+                            size = Size(size.width, glowDepth)
+                        )
+
+                        // Left side inner glow
                         drawRect(
                             brush = Brush.horizontalGradient(
                                 colors = listOf(
-                                    sideGlowColor,
-                                    sideGlowColor.copy(alpha = sideGlowColor.alpha * 0.4f),
+                                    subtleGlowColor,
+                                    subtleGlowColor.copy(alpha = subtleGlowColor.alpha * 0.35f),
                                     Color.Transparent
                                 ),
                                 startX = 0f,
-                                endX = glowWidth
+                                endX = glowDepth
                             ),
                             topLeft = Offset(0f, 0f),
-                            size = Size(glowWidth, size.height)
+                            size = Size(glowDepth, size.height)
                         )
 
-                        // Right side inner glow (fading from right curved edge inward)
+                        // Right side inner glow
                         drawRect(
                             brush = Brush.horizontalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    sideGlowColor.copy(alpha = sideGlowColor.alpha * 0.4f),
-                                    sideGlowColor
+                                    subtleGlowColor.copy(alpha = subtleGlowColor.alpha * 0.35f),
+                                    subtleGlowColor
                                 ),
-                                startX = size.width - glowWidth,
+                                startX = size.width - glowDepth,
                                 endX = size.width
                             ),
-                            topLeft = Offset(size.width - glowWidth, 0f),
-                            size = Size(glowWidth, size.height)
+                            topLeft = Offset(size.width - glowDepth, 0f),
+                            size = Size(glowDepth, size.height)
                         )
 
-                        // Draw content on top of the subtle side inner glow
+                        // Draw content on top of the subtle all-sides inner glow
                         drawContent()
                     }
             ) {
@@ -451,6 +494,8 @@ fun BottomNavBar(
                     Box(modifier = Modifier.fillMaxWidth()) {
                         val allSheetKeys = remember {
                             listOf(
+                                "create",
+                                "add_client",
                                 "attach_file",
                                 "share_link",
                                 "project",
@@ -463,10 +508,11 @@ fun BottomNavBar(
                                 "search"
                             )
                         }
-                        val effectiveActiveSheetId = expandedPillMode ?: lastActivePillMode
-                        val sheetOrder = remember(effectiveActiveSheetId) {
-                            if (effectiveActiveSheetId != null && allSheetKeys.contains(effectiveActiveSheetId)) {
-                                allSheetKeys.filter { it != effectiveActiveSheetId } + effectiveActiveSheetId
+                        val effectiveActiveSheetId = expandedPillMode
+                        val sheetOrder = remember(effectiveActiveSheetId, lastActivePillMode) {
+                            val active = effectiveActiveSheetId ?: lastActivePillMode
+                            if (active != null && allSheetKeys.contains(active)) {
+                                allSheetKeys.filter { it != active } + active
                             } else {
                                 allSheetKeys
                             }
@@ -479,6 +525,43 @@ fun BottomNavBar(
                                     activeSheetId = effectiveActiveSheetId
                                 ) {
                                     when (sheetMode) {
+                                        "create" -> {
+                                            CreateMorphSheet(
+                                                onClose = { expandedPillMode = null },
+                                                onOptionSelect = { optionId ->
+                                                    when (optionId) {
+                                                        "new_chat" -> {
+                                                            expandedPillMode = null
+                                                            onActionPillClick("open_chat:c1")
+                                                        }
+                                                        "add_client" -> {
+                                                            expandedPillMode = "add_client"
+                                                        }
+                                                        "new_project" -> {
+                                                            expandedPillMode = null
+                                                            onActionPillClick("open_project:p1")
+                                                        }
+                                                        "schedule_message" -> {
+                                                            expandedPillMode = null
+                                                            onActionPillClick("open_schedule:c1")
+                                                        }
+                                                        else -> {
+                                                            expandedPillMode = null
+                                                        }
+                                                    }
+                                                }
+                                            )
+                                        }
+                                        "add_client" -> {
+                                            AddClientMorphSheet(
+                                                onCancel = { expandedPillMode = "create" },
+                                                onConfirmAdd = onConfirmAddClient,
+                                                onClientAdded = { clientUid ->
+                                                    expandedPillMode = null
+                                                    onActionPillClick("open_chat:$clientUid")
+                                                }
+                                            )
+                                        }
                                         "project" -> {
                                             ProjectsMorphSheet(
                                                 clientName = clientName,
@@ -919,7 +1002,9 @@ fun BottomNavBar(
 
                             // 3. Central Glowing Lime Plus Pill Action
                             RadiantLimePlusPill(
-                                onClick = onPlusClick,
+                                onClick = {
+                                    expandedPillMode = if (expandedPillMode == "create") null else "create"
+                                },
                                 testTag = "nav_item_plus_pill"
                             )
 
@@ -973,7 +1058,7 @@ private fun RetainedMorphSheetItem(
     val alpha by animateFloatAsState(
         targetValue = if (isActive) 1f else 0f,
         animationSpec = if (isActive) {
-            tween(durationMillis = 180, delayMillis = 15, easing = FastOutSlowInEasing)
+            tween(durationMillis = 160, easing = FastOutSlowInEasing)
         } else {
             tween(durationMillis = 120, easing = FastOutSlowInEasing)
         },
@@ -2091,6 +2176,465 @@ fun CreateProjectMorphSheet(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = DarkGreen
+                    )
+                }
+            }
+        }
+    }
+}
+
+data class CreateOptionData(
+    val id: String,
+    val title: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val iconBgLight: Color,
+    val iconBgDark: Color,
+    val iconTintLight: Color,
+    val iconTintDark: Color
+)
+
+@Composable
+fun CreateMorphSheet(
+    onClose: () -> Unit,
+    onOptionSelect: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = GlobalChatTheme.colors
+    var dragAmountY by remember { mutableFloatStateOf(0f) }
+
+    val options = remember {
+        listOf(
+            CreateOptionData(
+                id = "new_chat",
+                title = "New chat",
+                icon = Icons.Outlined.ChatBubbleOutline,
+                iconBgLight = Color(0xFFE2F6D5),
+                iconBgDark = Color(0xFF2B3A23),
+                iconTintLight = DarkGreen,
+                iconTintDark = WiseLime
+            ),
+            CreateOptionData(
+                id = "add_client",
+                title = "Add client",
+                icon = Icons.Outlined.PersonAdd,
+                iconBgLight = Color(0xFFE1F0FA),
+                iconBgDark = Color(0xFF1E2F3C),
+                iconTintLight = Color(0xFF0F5A8A),
+                iconTintDark = Color(0xFF73C2F5)
+            ),
+            CreateOptionData(
+                id = "new_project",
+                title = "New project",
+                icon = Icons.Outlined.Folder,
+                iconBgLight = Color(0xFFFCEBD9),
+                iconBgDark = Color(0xFF3B2B1E),
+                iconTintLight = Color(0xFF8C4A0F),
+                iconTintDark = Color(0xFFF5B073)
+            ),
+            CreateOptionData(
+                id = "schedule_message",
+                title = "Schedule",
+                icon = Icons.Outlined.Schedule,
+                iconBgLight = Color(0xFFF4EBFB),
+                iconBgDark = Color(0xFF2E2238),
+                iconTintLight = Color(0xFF5B2C6F),
+                iconTintDark = Color(0xFFD7A1F9)
+            )
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragStart = { dragAmountY = 0f },
+                    onDragEnd = {
+                        if (dragAmountY > 30f) {
+                            onClose()
+                        }
+                        dragAmountY = 0f
+                    },
+                    onDragCancel = { dragAmountY = 0f },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        if (dragAmount > 0f) {
+                            dragAmountY += dragAmount
+                        }
+                    }
+                )
+            }
+            .padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 18.dp)
+    ) {
+        // Drag handle indicator bar
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .padding(bottom = 6.dp)
+                .width(36.dp)
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(if (colors.isDark) Color(0xFF3E443A) else Color(0xFFD2D6CC))
+        )
+
+        // Header Row: Title and Subtitle
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.padding(start = 4.dp)
+            ) {
+                Text(
+                    text = "Create",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = colors.textPrimary,
+                    lineHeight = 22.sp
+                )
+
+                Spacer(modifier = Modifier.height(1.dp))
+
+                Text(
+                    text = "Select an action to start",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.textSecondary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Options Row with 4 bouncy pills
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEach { option ->
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val scale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.92f else 1.0f,
+                    animationSpec = spring(stiffness = 500f),
+                    label = "create_option_pill_scale"
+                )
+
+                Surface(
+                    onClick = { onOptionSelect(option.id) },
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (colors.isDark) option.iconBgDark else option.iconBgLight,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (colors.isDark) option.iconTintDark.copy(alpha = 0.3f) else option.iconBgLight
+                    ),
+                    interactionSource = interactionSource,
+                    modifier = Modifier
+                        .weight(1f)
+                        .scale(scale)
+                        .height(68.dp)
+                        .testTag("create_morph_option_${option.id}")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(vertical = 6.dp, horizontal = 2.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = option.icon,
+                            contentDescription = option.title,
+                            tint = if (colors.isDark) option.iconTintDark else option.iconTintLight,
+                            modifier = Modifier.size(20.dp)
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Text(
+                            text = option.title,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (colors.isDark) option.iconTintDark else option.iconTintLight,
+                            maxLines = 1,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+    }
+}
+
+@Composable
+fun AddClientMorphSheet(
+    onCancel: () -> Unit,
+    onConfirmAdd: (username: String, onError: (String) -> Unit, onSuccess: (clientUid: String) -> Unit) -> Unit,
+    onClientAdded: (clientUid: String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = GlobalChatTheme.colors
+    var dragAmountY by remember { mutableFloatStateOf(0f) }
+
+    var usernameInput by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    var isRequestSent by remember { mutableStateOf(false) }
+    var addedClientUid by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Auto-close navigation bar after 5 seconds when request is sent
+    LaunchedEffect(isRequestSent) {
+        if (isRequestSent) {
+            delay(5000)
+            onClientAdded(addedClientUid)
+        }
+    }
+
+    // Auto-reset error message after 3 seconds with a smooth roller animation back to subtitle
+    LaunchedEffect(errorMessage) {
+        if (errorMessage != null) {
+            delay(3000)
+            errorMessage = null
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragStart = { dragAmountY = 0f },
+                    onDragEnd = {
+                        if (dragAmountY > 30f) {
+                            onCancel()
+                        }
+                        dragAmountY = 0f
+                    },
+                    onDragCancel = { dragAmountY = 0f },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        if (dragAmount > 0f) {
+                            dragAmountY += dragAmount
+                        }
+                    }
+                )
+            }
+            .padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 18.dp)
+    ) {
+        // Drag handle indicator bar
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .padding(bottom = 6.dp)
+                .width(36.dp)
+                .height(4.dp)
+                .clip(CircleShape)
+                .background(if (colors.isDark) Color(0xFF3E443A) else Color(0xFFD2D6CC))
+        )
+
+        // Header Row: Title and Subtitle with roller error animation
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 4.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Outlined.PersonAdd,
+                        contentDescription = null,
+                        tint = if (colors.isDark) WiseLime else NearBlack,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Add Client",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = colors.textPrimary,
+                        lineHeight = 22.sp
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                // Roller animation for error messages replacing subtitle
+                AnimatedContent(
+                    targetState = errorMessage,
+                    transitionSpec = {
+                        if (targetState != null) {
+                            (slideInVertically(animationSpec = tween(320, easing = FastOutSlowInEasing)) { height -> height } +
+                                fadeIn(animationSpec = tween(220)))
+                                .togetherWith(
+                                    slideOutVertically(animationSpec = tween(320, easing = FastOutSlowInEasing)) { height -> -height } +
+                                        fadeOut(animationSpec = tween(180))
+                                )
+                        } else {
+                            (slideInVertically(animationSpec = tween(320, easing = FastOutSlowInEasing)) { height -> -height } +
+                                fadeIn(animationSpec = tween(220)))
+                                .togetherWith(
+                                    slideOutVertically(animationSpec = tween(320, easing = FastOutSlowInEasing)) { height -> height } +
+                                        fadeOut(animationSpec = tween(180))
+                                )
+                        }
+                    },
+                    label = "add_client_subtitle_roller"
+                ) { errText ->
+                    if (errText != null) {
+                        Text(
+                            text = errText,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFD03238),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    } else {
+                        Text(
+                            text = "Enter username to add to SyncLine",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colors.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Username input field
+        OutlinedTextField(
+            value = usernameInput,
+            onValueChange = {
+                usernameInput = it
+                if (errorMessage != null) errorMessage = null
+            },
+            placeholder = { Text("e.g. sarah_j", color = colors.textSecondary, fontSize = 13.5.sp) },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Outlined.PersonPin,
+                    contentDescription = null,
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+            },
+            singleLine = true,
+            enabled = !isLoading && !isRequestSent,
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = WiseLime,
+                unfocusedBorderColor = colors.cardBorder,
+                focusedContainerColor = if (colors.isDark) Color(0xFF1E221C) else Color(0xFFF6F8F3),
+                unfocusedContainerColor = if (colors.isDark) Color(0xFF1E221C) else Color(0xFFF6F8F3),
+                focusedTextColor = colors.textPrimary,
+                unfocusedTextColor = colors.textPrimary
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("add_client_morph_username_input")
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Morphed Action Buttons: standard 2 buttons morph into 1 single success pill
+        AnimatedContent(
+            targetState = isRequestSent,
+            transitionSpec = {
+                (fadeIn(animationSpec = tween(220, easing = FastOutSlowInEasing)) +
+                    scaleIn(initialScale = 0.95f, animationSpec = spring(stiffness = 400f)))
+                    .togetherWith(
+                        fadeOut(animationSpec = tween(180, easing = FastOutSlowInEasing)) +
+                        scaleOut(targetScale = 0.95f, animationSpec = spring(stiffness = 400f))
+                    )
+            },
+            label = "add_client_button_morph"
+        ) { requestSent ->
+            if (requestSent) {
+                Surface(
+                    shape = CircleShape,
+                    color = WiseLime,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("add_client_request_sent_pill")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = DarkGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Request sent · Check Activity tab",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = DarkGreen,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WisePillButton(
+                        text = "Back",
+                        onClick = { if (!isLoading) onCancel() },
+                        isPrimary = false,
+                        modifier = Modifier.weight(1f),
+                        testTag = "add_client_morph_back_btn"
+                    )
+
+                    WisePillButton(
+                        text = if (isLoading) "Looking up..." else "Add Client",
+                        onClick = {
+                            if (!isLoading) {
+                                val cleanUsername = usernameInput.trim().lowercase()
+                                if (cleanUsername.isBlank()) {
+                                    errorMessage = "Please enter a username."
+                                } else if (cleanUsername.length < 3) {
+                                    errorMessage = "Username must be at least 3 characters."
+                                } else if (!cleanUsername.matches(Regex("^[a-zA-Z0-9_.]+$"))) {
+                                    errorMessage = "Only letters, numbers, underscores, dots allowed."
+                                } else {
+                                    isLoading = true
+                                    errorMessage = null
+                                    onConfirmAdd(
+                                        cleanUsername,
+                                        { err ->
+                                            isLoading = false
+                                            errorMessage = err
+                                        },
+                                        { clientUid ->
+                                            isLoading = false
+                                            addedClientUid = clientUid
+                                            isRequestSent = true
+                                        }
+                                    )
+                                }
+                            }
+                        },
+                        isPrimary = true,
+                        modifier = Modifier.weight(1.2f),
+                        testTag = "add_client_morph_submit_btn"
                     )
                 }
             }

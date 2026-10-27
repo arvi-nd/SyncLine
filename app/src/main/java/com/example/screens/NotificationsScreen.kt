@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.components.WiseAvatar
+import com.example.components.WisePillButton
+import com.example.model.ChatRequest
 import com.example.model.NotificationItem
 import com.example.model.NotificationType
 import com.example.ui.theme.DarkGreen
@@ -53,6 +55,9 @@ fun NotificationsScreen(
 ) {
     val colors = GlobalChatTheme.colors
     val notifications by viewModel.notifications.collectAsState()
+    val chatRequests by viewModel.chatRequests.collectAsState()
+    val currentUser by viewModel.currentUser.collectAsState()
+    val currentUid = currentUser?.uid ?: ""
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -85,7 +90,7 @@ fun NotificationsScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
-                        text = "Notifications",
+                        text = "Activity",
                         fontSize = 24.sp,
                         fontWeight = FontWeight.Bold,
                         color = colors.textPrimary
@@ -103,15 +108,187 @@ fun NotificationsScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Notifications List
+            // Notifications & Requests List
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                if (chatRequests.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "CHAT REQUESTS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.1.sp,
+                            color = colors.textSecondary.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                        )
+                    }
+
+                    items(chatRequests, key = { "req_${it.id}" }) { req ->
+                        ChatRequestCard(
+                            request = req,
+                            currentUid = currentUid,
+                            onAccept = { viewModel.acceptChatRequest(req) },
+                            onDecline = { viewModel.declineChatRequest(req.id) }
+                        )
+                    }
+
+                    item {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "SYSTEM & UPDATES",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.1.sp,
+                            color = colors.textSecondary.copy(alpha = 0.8f),
+                            modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                        )
+                    }
+                }
+
                 items(notifications, key = { it.id }) { item ->
                     NotificationRow(item = item)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ChatRequestCard(
+    request: ChatRequest,
+    currentUid: String,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    val colors = GlobalChatTheme.colors
+    val isIncoming = request.targetUid == currentUid
+
+    val titleText = if (isIncoming) {
+        "Chat request from ${request.senderDisplayName.ifBlank { request.senderUsername }}"
+    } else {
+        "Chat request to ${request.targetDisplayName.ifBlank { request.targetUsername }}"
+    }
+
+    val subtitleText = if (isIncoming) {
+        "@${request.senderUsername} wants to connect with you"
+    } else {
+        "Request sent to @${request.targetUsername}"
+    }
+
+    val avatarInitial = if (isIncoming) {
+        request.senderDisplayName.firstOrNull()?.toString()?.uppercase()
+            ?: request.senderUsername.take(2).uppercase().ifBlank { "CR" }
+    } else {
+        request.targetDisplayName.firstOrNull()?.toString()?.uppercase()
+            ?: request.targetUsername.take(2).uppercase().ifBlank { "CR" }
+    }
+
+    val avatarName = if (isIncoming) request.senderDisplayName else request.targetDisplayName
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = colors.cardBackground,
+        border = androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("chat_request_card_${request.id}")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                WiseAvatar(
+                    name = avatarName,
+                    initial = avatarInitial,
+                    backgroundColor = if (isIncoming) WiseLime else Color(0xFFC7E2FE),
+                    size = 44.dp
+                )
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = titleText,
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = subtitleText,
+                        fontSize = 12.5.sp,
+                        color = colors.textSecondary
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Status Chip
+                val chipText = when (request.status) {
+                    "PENDING" -> if (isIncoming) "Pending" else "Sent"
+                    "ACCEPTED" -> "Accepted"
+                    "DECLINED" -> "Declined"
+                    else -> request.status
+                }
+                val chipBg = when (request.status) {
+                    "PENDING" -> if (isIncoming) WiseLime.copy(alpha = 0.25f) else Color(0xFFFFF3C4)
+                    "ACCEPTED" -> Color(0xFFE2F6D5)
+                    "DECLINED" -> Color(0xFFFDE8E8)
+                    else -> colors.cardBorder.copy(alpha = 0.3f)
+                }
+                val chipTextCol = when (request.status) {
+                    "PENDING" -> if (isIncoming) DarkGreen else Color(0xFF8C5800)
+                    "ACCEPTED" -> DarkGreen
+                    "DECLINED" -> Color(0xFFD03238)
+                    else -> colors.textSecondary
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(9999.dp))
+                        .background(chipBg)
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = chipText,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = chipTextCol
+                    )
+                }
+            }
+
+            // Accept & Decline buttons for incoming pending requests
+            if (isIncoming && request.status == "PENDING") {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    WisePillButton(
+                        text = "Decline",
+                        onClick = onDecline,
+                        isPrimary = false,
+                        modifier = Modifier.weight(1f),
+                        testTag = "decline_request_${request.id}"
+                    )
+
+                    WisePillButton(
+                        text = "Accept",
+                        onClick = onAccept,
+                        isPrimary = true,
+                        modifier = Modifier.weight(1f),
+                        testTag = "accept_request_${request.id}"
+                    )
                 }
             }
         }

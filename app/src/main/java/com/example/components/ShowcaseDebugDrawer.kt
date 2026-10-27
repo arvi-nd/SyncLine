@@ -47,7 +47,8 @@ data class ShowcaseScreenItem(
 
 val showcaseScreens = listOf(
     ShowcaseScreenItem(1, "Splash / Launch Screen", "splash"),
-    ShowcaseScreenItem(2, "Login / Sign Up", "login"),
+    ShowcaseScreenItem(2, "Login", "login"),
+    ShowcaseScreenItem(3, "Sign Up", "signup"),
     ShowcaseScreenItem(3, "Home / Inbox", "inbox"),
     ShowcaseScreenItem(4, "Chat Screen", "chat/c1"),
     ShowcaseScreenItem(5, "Client Details / Timezone", "client_details/c1"),

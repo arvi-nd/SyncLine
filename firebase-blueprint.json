@@ -1,0 +1,53 @@
+{
+  "entities": {
+    "UserProfile": {
+      "path": "users/{uid}",
+      "type": "document",
+      "fields": {
+        "uid": { "type": "string", "description": "Authenticated Firebase User ID" },
+        "displayName": { "type": "string", "description": "User display name" },
+        "email": { "type": "string", "description": "User account email address" },
+        "username": { "type": "string", "description": "Unique username" },
+        "createdAt": { "type": "timestamp", "description": "Account document creation timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Last profile update timestamp" }
+      }
+    },
+    "ClientRelationship": {
+      "path": "users/{uid}/clients/{clientId}",
+      "type": "document",
+      "fields": {
+        "clientId": { "type": "string", "description": "Client UID" },
+        "uid": { "type": "string", "description": "Client UID" },
+        "username": { "type": "string", "description": "Client username" },
+        "displayName": { "type": "string", "description": "Client display name" },
+        "createdAt": { "type": "timestamp", "description": "Relationship creation timestamp" }
+      }
+    },
+    "UsernameIndex": {
+      "path": "usernames/{username}",
+      "type": "document",
+      "fields": {
+        "uid": { "type": "string", "description": "User UID" },
+        "username": { "type": "string", "description": "Unique username" },
+        "displayName": { "type": "string", "description": "Display name" },
+        "email": { "type": "string", "description": "Email" }
+      }
+    },
+    "ChatRequest": {
+      "path": "chat_requests/{requestId}",
+      "type": "document",
+      "fields": {
+        "id": { "type": "string", "description": "Request ID (${senderUid}_${targetUid})" },
+        "senderUid": { "type": "string", "description": "UID of sender" },
+        "senderUsername": { "type": "string", "description": "Username of sender" },
+        "senderDisplayName": { "type": "string", "description": "Display name of sender" },
+        "targetUid": { "type": "string", "description": "UID of target recipient" },
+        "targetUsername": { "type": "string", "description": "Username of target recipient" },
+        "targetDisplayName": { "type": "string", "description": "Display name of target recipient" },
+        "status": { "type": "string", "description": "PENDING, ACCEPTED, or DECLINED" },
+        "createdAt": { "type": "timestamp", "description": "Creation timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Update timestamp" }
+      }
+    }
+  }
+}
