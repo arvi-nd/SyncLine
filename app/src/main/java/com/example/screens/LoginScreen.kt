@@ -50,6 +50,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.components.GoogleSignInButton
 import com.example.components.WisePillButton
 import com.example.ui.theme.GlobalChatTheme
 import com.example.ui.theme.NearBlack
@@ -69,6 +70,7 @@ fun LoginScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var infoMessage by remember { mutableStateOf<String?>(null) }
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -207,6 +209,19 @@ fun LoginScreen(
                     )
                 }
 
+                if (infoMessage != null) {
+                    Text(
+                        text = infoMessage!!,
+                        fontSize = 13.sp,
+                        color = colors.textSecondary,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    )
+                }
+
                 // Sign In Button
                 WisePillButton(
                     text = if (isLoading) "Signing in..." else "Sign In",
@@ -248,7 +263,16 @@ fun LoginScreen(
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { }
+                        .clickable {
+                            errorMessage = null
+                            infoMessage = null
+                            viewModel?.sendPasswordReset(
+                                emailStr = email,
+                                onSuccess = { infoMessage = "Password reset link sent to ${email.trim()}. Check your inbox." },
+                                onError = { errorMessage = it }
+                            )
+                        }
+                        .testTag("login_forgot_password")
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -270,71 +294,12 @@ fun LoginScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Social Sign In: Google
-                Surface(
-                    onClick = onSignInSuccess,
-                    shape = RoundedCornerShape(9999.dp),
-                    color = colors.cardBackground,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("login_google_button")
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "G",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 18.sp,
-                            color = Color(0xFFEA4335)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Continue with Google",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
-                            color = colors.textPrimary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Social Sign In: Apple
-                Surface(
-                    onClick = onSignInSuccess,
-                    shape = RoundedCornerShape(9999.dp),
-                    color = colors.cardBackground,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("login_apple_button")
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = colors.textPrimary
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Continue with Apple",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
-                            color = colors.textPrimary
-                        )
-                    }
-                }
+                GoogleSignInButton(
+                    viewModel = viewModel,
+                    onSuccess = onSignInSuccess,
+                    onError = { errorMessage = it },
+                    testTag = "login_google_button"
+                )
             }
 
             // Bottom Sign Up Text

@@ -43,6 +43,9 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
 
     private val auth: FirebaseAuth by lazy { Firebase.auth }
     private val userRepository by lazy { UserRepository(getApplication<Application>()) }
+    private val prefs by lazy {
+        getApplication<Application>().getSharedPreferences("syncline_prefs", android.content.Context.MODE_PRIVATE)
+    }
 
     private val _currentUser = MutableStateFlow<FirebaseUser?>(null)
     val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
@@ -53,7 +56,7 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
     private val _chatRequests = MutableStateFlow<List<ChatRequest>>(emptyList())
     val chatRequests: StateFlow<List<ChatRequest>> = _chatRequests.asStateFlow()
 
-    private val _isDarkTheme = MutableStateFlow(false)
+    private val _isDarkTheme = MutableStateFlow(prefs.getBoolean("dark_theme", false))
     val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
 
     private val _clients = MutableStateFlow<List<Client>>(emptyList())
@@ -101,6 +104,15 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
     private val _lastScheduledNotice = MutableStateFlow<String?>(null)
     val lastScheduledNotice: StateFlow<String?> = _lastScheduledNotice.asStateFlow()
 
+    private val _partnerTyping = MutableStateFlow(false)
+    val partnerTyping: StateFlow<Boolean> = _partnerTyping.asStateFlow()
+
+    private val _partnerReadAt = MutableStateFlow(0L)
+    val partnerReadAt: StateFlow<Long> = _partnerReadAt.asStateFlow()
+
+    private val _replyingTo = MutableStateFlow<Message?>(null)
+    val replyingTo: StateFlow<Message?> = _replyingTo.asStateFlow()
+
     private val _isSendingMessage = MutableStateFlow(false)
     val isSendingMessage: StateFlow<Boolean> = _isSendingMessage.asStateFlow()
 
@@ -113,6 +125,78 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _isDebugDialogOpen = MutableStateFlow(false)
     val isDebugDialogOpen: StateFlow<Boolean> = _isDebugDialogOpen.asStateFlow()
+
+    // Starred chats are a personal, per-device preference.
+    private val _starredIds = MutableStateFlow(prefs.getStringSet("starred_chats", emptySet()) ?: emptySet())
+
+    fun toggleStar(clientId: String) {
+        val next = _starredIds.value.let { if (clientId in it) it - clientId else it + clientId }
+        _starredIds.value = next
+        prefs.edit().putStringSet("starred_chats", next).apply()
+    }
+
+    /** Clears the unread badge once the conversation with [partnerUid] is on screen. */
+    fun markChatRead(partnerUid: String) {
+        val myUid = auth.currentUser?.uid ?: return
+        val convId = ConversationUtils.getConversationId(myUid, ConversationUtils.extractPartnerUid(myUid, partnerUid))
+        if (convId.isBlank()) return
+        viewModelScope.launch { userRepository.markConversationRead(myUid, convId) }
+    }
+
+    private fun flagEmoji(countryCode: String): String {
+        if (countryCode.length != 2 || !countryCode.all { it.isLetter() }) return "🌐"
+        return countryCode.uppercase().map { String(Character.toChars(0x1F1E6 + (it - 'A'))) }.joinToString("")
+    }
+
+    private fun formatHour(hour: Int): String {
+        val h = ((hour % 24) + 24) % 24
+        val display = when { h == 0 -> 12; h > 12 -> h - 12; else -> h }
+        return "$display:00 ${if (h < 12) "AM" else "PM"}"
+    }
+
+    /** Builds the contact shown in the app from a real profile (timezone, country, working hours). */
+    private fun buildClient(profile: UserProfile): Client {
+        val name = profile.displayName.ifBlank { profile.username.ifBlank { "Client" } }
+        val initial = name.split(" ")
+            .mapNotNull { it.firstOrNull()?.toString() }
+            .take(2).joinToString("").uppercase()
+            .ifBlank { profile.username.take(2).uppercase().ifBlank { "CL" } }
+        val zoneId = try { java.time.ZoneId.of(profile.timezone.ifBlank { "UTC" }).id } catch (_: Exception) { "UTC" }
+        val region = profile.countryCode.uppercase()
+        val countryName = if (region.length == 2) java.util.Locale("", region).displayCountry else ""
+        val city = zoneId.substringAfterLast('/').replace('_', ' ')
+        val now = java.time.ZonedDateTime.now(java.time.ZoneId.of(zoneId))
+        val isWeekday = now.dayOfWeek != java.time.DayOfWeek.SATURDAY && now.dayOfWeek != java.time.DayOfWeek.SUNDAY
+        val working = isWeekday && now.hour >= profile.workingStartHour && now.hour < profile.workingEndHour
+        return Client(
+            id = profile.uid,
+            name = name,
+            firstName = name.substringBefore(" ").ifBlank { name },
+            company = "SyncLine Partner",
+            role = "Client",
+            country = countryName.ifBlank { "Unknown location" },
+            city = city,
+            countryCode = region,
+            flag = flagEmoji(region),
+            timezoneId = zoneId,
+            localTimeStr = TimezoneEngine.formatCurrentTime(zoneId, Instant.now()),
+            statusStr = when {
+                profile.availability == "Do not disturb" -> "Do not disturb"
+                profile.availability == "Busy" -> "Busy"
+                working -> "Working"
+                else -> "After hours"
+            },
+            workingHours = "Mon - Fri, ${formatHour(profile.workingStartHour)} - ${formatHour(profile.workingEndHour)}",
+            avatarBg = androidx.compose.ui.graphics.Color(0xFF9FE870),
+            avatarInitial = initial,
+            isOnline = working && profile.availability == "Available",
+            lastSeen = when {
+                profile.availability != "Available" -> profile.availability
+                working -> "Available now"
+                else -> "Outside working hours"
+            }
+        )
+    }
 
     private var profileJob: Job? = null
     private var requestsJob: Job? = null
@@ -179,6 +263,7 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private var invoicesJob: Job? = null
+    private var invoicesRemoteJob: Job? = null
 
     private fun syncUserInvoices(user: FirebaseUser?) {
         invoicesJob?.cancel()
@@ -188,10 +273,27 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         val currentUid = user.uid
+        // Changes made on the other phone (paid, edited, cancelled) arrive here and refresh the local cache.
+        invoicesRemoteJob?.cancel()
+        invoicesRemoteJob = viewModelScope.launch {
+            userRepository.observeInvoicesRemote(currentUid).collect { remote ->
+                if (auth.currentUser?.uid == currentUid) userRepository.cacheInvoices(remote)
+            }
+        }
         invoicesJob = viewModelScope.launch {
-            userRepository.observeAllInvoices().collect { allInvoices ->
+            userRepository.observeAllInvoices().collect { cached ->
+                val allInvoices = cached.filter { it.organizerUid == currentUid || it.clientUid == currentUid }
                 if (auth.currentUser?.uid == currentUid) {
                     _invoices.value = allInvoices
+                    // Keep invoice cards already in the chat in step with edits made elsewhere.
+                    val latest = allInvoices.associateBy { it.id }
+                    _messages.update { list ->
+                        list.map { msg ->
+                            val id = msg.invoiceCard?.id ?: msg.invoiceId
+                            val fresh = id?.let { latest[it] }
+                            if (fresh != null && fresh != msg.invoiceCard) msg.copy(invoiceCard = fresh) else msg
+                        }
+                    }
                 }
             }
         }
@@ -230,6 +332,7 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
             userRepository.observeMeetingsForUser(currentUid).collect { userMeetings ->
                 if (auth.currentUser?.uid == currentUid) {
                     _meetings.value = userMeetings
+                    com.example.reminders.MeetingReminders.sync(getApplication(), userMeetings)
                 }
             }
         }
@@ -263,29 +366,10 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                 if (auth.currentUser?.uid != currentUid) return@collect
 
                 val updatedClients = clientProfiles.map { profile ->
-                    val initial = profile.displayName.split(" ")
-                        .mapNotNull { it.firstOrNull()?.toString() }
-                        .take(2).joinToString("").uppercase()
-                        .ifBlank { profile.username.take(2).uppercase().ifBlank { "CL" } }
-
-                    Client(
-                        id = profile.uid,
-                        name = profile.displayName.ifBlank { profile.username.ifBlank { "Client" } },
-                        firstName = profile.displayName.substringBefore(" ").ifBlank { profile.username },
-                        company = "SyncLine Partner",
-                        role = "Client",
-                        country = "United States",
-                        city = "New York",
-                        countryCode = "US",
-                        flag = "🇺🇸",
-                        timezoneId = "America/New_York",
-                        localTimeStr = TimezoneEngine.formatCurrentTime("America/New_York", Instant.now()),
-                        statusStr = "Working",
-                        workingHours = "Mon - Fri, 9:00 AM - 6:00 PM",
-                        avatarBg = androidx.compose.ui.graphics.Color(0xFF9FE870),
-                        avatarInitial = initial,
-                        isOnline = true,
-                        lastSeen = "Online"
+                    val full = userRepository.getProfile(profile.uid, forceRefresh = true)
+                    buildClient(
+                        if (full != null) full.copy(displayName = full.displayName.ifBlank { profile.displayName })
+                        else profile
                     )
                 }
 
@@ -302,8 +386,9 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         conversationsJob = viewModelScope.launch {
             combine(
                 _clients,
-                userRepository.observeUserConversations(currentUid)
-            ) { clientsList, conversationsList ->
+                userRepository.observeUserConversations(currentUid),
+                _starredIds
+            ) { clientsList, conversationsList, starredIds ->
                 if (auth.currentUser?.uid != currentUid) return@combine emptyList<MockDataProvider.InboxItem>()
 
                 val convMap = conversationsList.associateBy { it.id }
@@ -321,8 +406,8 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                             lastMessage = lastMsg,
                             timestamp = timeStr,
                             statusText = "SyncLine · Active",
-                            unreadCount = 0,
-                            isStarred = false
+                            unreadCount = conversation?.unreadCount ?: 0,
+                            isStarred = client.id in starredIds
                         ),
                         timeSeconds
                     )
@@ -336,27 +421,7 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                 }.map { conv ->
                     val partnerUid = conv.participantUids.find { it != currentUid } ?: ""
                     val partnerProfile = userRepository.getProfile(partnerUid)
-                    val name = partnerProfile?.displayName?.ifBlank { partnerProfile.username } ?: "Partner"
-                    val initial = name.split(" ").mapNotNull { it.firstOrNull()?.toString() }.take(2).joinToString("").uppercase().ifBlank { "CL" }
-                    val client = Client(
-                        id = partnerUid,
-                        name = name,
-                        firstName = name.substringBefore(" ").ifBlank { name },
-                        company = "SyncLine Partner",
-                        role = "Client",
-                        country = "United States",
-                        city = "New York",
-                        countryCode = "US",
-                        flag = "🇺🇸",
-                        timezoneId = "America/New_York",
-                        localTimeStr = TimezoneEngine.formatCurrentTime("America/New_York", Instant.now()),
-                        statusStr = "Working",
-                        workingHours = "Mon - Fri, 9:00 AM - 6:00 PM",
-                        avatarBg = androidx.compose.ui.graphics.Color(0xFF9FE870),
-                        avatarInitial = initial,
-                        isOnline = true,
-                        lastSeen = "Online"
-                    )
+                    val client = buildClient(partnerProfile ?: UserProfile(uid = partnerUid, displayName = "Partner"))
 
                     val lastMsg = conv.lastMessage.ifBlank { "Chat request accepted" }
                     val timeStr = formatRelativeTimestamp(conv.lastMessageAt)
@@ -368,8 +433,8 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                             lastMessage = lastMsg,
                             timestamp = timeStr,
                             statusText = "SyncLine · Active",
-                            unreadCount = 0,
-                            isStarred = false
+                            unreadCount = conv.unreadCount,
+                            isStarred = client.id in starredIds
                         ),
                         timeSeconds
                     )
@@ -498,17 +563,39 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                 .addOnFailureListener { exc ->
                     val msg = exc.localizedMessage ?: "Authentication failed."
                     if (msg.contains("no user record", ignoreCase = true) || msg.contains("user-not-found", ignoreCase = true)) {
-                        auth.createUserWithEmailAndPassword(cleanEmail, cleanPass)
-                            .addOnSuccessListener { onSuccess() }
-                            .addOnFailureListener { createExc ->
-                                onError(createExc.localizedMessage ?: "Could not create account.")
-                            }
+                        onError("No account found for this email. Tap Sign up to create one.")
                     } else {
                         onError(msg)
                     }
                 }
         } catch (e: Exception) {
             onError(e.localizedMessage ?: "Sign in error.")
+        }
+    }
+
+    fun sendPasswordReset(emailStr: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val cleanEmail = emailStr.trim()
+        if (cleanEmail.isEmpty()) {
+            onError("Enter your email address first, then tap Forgot password.")
+            return
+        }
+        try {
+            auth.sendPasswordResetEmail(cleanEmail)
+                .addOnSuccessListener { onSuccess() }
+                .addOnFailureListener { onError(it.localizedMessage ?: "Could not send the reset email.") }
+        } catch (e: Exception) {
+            onError(e.localizedMessage ?: "Could not send the reset email.")
+        }
+    }
+
+    fun signInWithGoogle(idToken: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        try {
+            val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+            auth.signInWithCredential(credential)
+                .addOnSuccessListener { onSuccess() }
+                .addOnFailureListener { onError(it.localizedMessage ?: "Google sign-in failed.") }
+        } catch (e: Exception) {
+            onError(e.localizedMessage ?: "Google sign-in failed.")
         }
     }
 
@@ -604,13 +691,31 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         onComplete()
     }
 
-    // Theme state (in-memory only)
+    // Theme state (saved on the device)
     fun toggleTheme() {
-        _isDarkTheme.update { !it }
+        setTheme(!_isDarkTheme.value)
     }
 
     fun setTheme(dark: Boolean) {
         _isDarkTheme.value = dark
+        prefs.edit().putBoolean("dark_theme", dark).apply()
+    }
+
+    fun updateProfileSettings(
+        displayName: String? = null,
+        timezone: String? = null,
+        workingStartHour: Int? = null,
+        workingEndHour: Int? = null,
+        availability: String? = null,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        val uid = auth.currentUser?.uid ?: run { onResult(false); return }
+        viewModelScope.launch {
+            val ok = userRepository.updateProfileSettings(
+                uid, displayName, timezone, workingStartHour, workingEndHour, availability
+            )
+            onResult(ok)
+        }
     }
 
     // Clients
@@ -628,30 +733,7 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
             val name = if (isTarget) request.targetDisplayName.ifBlank { request.targetUsername }
                        else request.senderDisplayName.ifBlank { request.senderUsername }
             val username = if (isTarget) request.targetUsername else request.senderUsername
-            val initial = name.split(" ")
-                .mapNotNull { it.firstOrNull()?.toString() }
-                .take(2).joinToString("").uppercase()
-                .ifBlank { username.take(2).uppercase().ifBlank { "CL" } }
-
-            val synthesized = Client(
-                id = clientId,
-                name = name.ifBlank { "Client" },
-                firstName = name.substringBefore(" ").ifBlank { "Client" },
-                company = "SyncLine Partner",
-                role = "Client",
-                country = "United States",
-                city = "New York",
-                countryCode = "US",
-                flag = "🇺🇸",
-                timezoneId = "America/New_York",
-                localTimeStr = TimezoneEngine.formatCurrentTime("America/New_York", Instant.now()),
-                statusStr = "Working",
-                workingHours = "Mon - Fri, 9:00 AM - 6:00 PM",
-                avatarBg = androidx.compose.ui.graphics.Color(0xFF9FE870),
-                avatarInitial = initial,
-                isOnline = true,
-                lastSeen = "Online"
-            )
+            val synthesized = buildClient(UserProfile(uid = clientId, displayName = name, username = username))
             _clients.update { (it + synthesized).distinctBy { c -> c.id } }
             return synthesized
         }
@@ -707,27 +789,37 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         conversationId: String,
         text: String,
         senderName: String = "You",
+        reply: Message? = _replyingTo.value,
         onResult: ((Boolean) -> Unit)? = null
     ) {
         val cleanText = text.trim()
         if (cleanText.isBlank()) return
 
         val myName = _userProfile.value?.displayName?.ifBlank { senderName } ?: senderName
+        val now = System.currentTimeMillis()
         val localMsg = Message(
-            id = "msg_${System.currentTimeMillis()}",
+            id = "msg_$now",
             conversationId = conversationId,
             senderName = myName,
             text = cleanText,
-            timestamp = TimezoneEngine.formatCurrentTime("America/New_York", Instant.now()),
+            timestamp = TimezoneEngine.formatCurrentTime(java.time.ZoneId.systemDefault().id, Instant.now()),
             isOutgoing = true,
-            isRead = true
+            isRead = true,
+            status = "sending",
+            sentAtMillis = now,
+            replyToId = reply?.id,
+            replyToText = reply?.text?.take(120),
+            replyToName = reply?.senderName
         )
+        _replyingTo.value = null
+        notifyTyping(false)
 
-        // Optimistically update local message list so user sees their sent message immediately
-        _messages.update { current ->
-            if (current.none { it.id == localMsg.id || (it.text == cleanText && it.isOutgoing) }) {
-                current + localMsg
-            } else current
+        // Show the message immediately; it is replaced by the real one once it is stored.
+        _messages.update { current -> current + localMsg }
+
+        fun markFailed() {
+            _messages.update { list -> list.map { if (it.id == localMsg.id) it.copy(status = "failed") else it } }
+            _chatErrorMessage.value = "Message not sent. Tap it to try again."
         }
 
         val currentUid = auth.currentUser?.uid
@@ -744,24 +836,95 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                             senderUid = currentUid,
                             partnerUid = resolvedPartnerUid,
                             senderName = myName,
-                            text = cleanText
+                            text = cleanText,
+                            replyToId = reply?.id,
+                            replyToText = reply?.text,
+                            replyToName = reply?.senderName
                         )
-                        if (!success) {
-                            android.util.Log.w("SyncLineDiagnostics", "[SEND_VIEWMODEL_WARN] RTDB sync pending or unconfirmed for conv=$actualConvId")
-                        } else {
-                            _chatErrorMessage.value = null
-                        }
+                        if (success) _chatErrorMessage.value = null else markFailed()
                         onResult?.invoke(success)
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
                         android.util.Log.e("SyncLineDiagnostics", "[SEND_VIEWMODEL_FAIL] sendMessage exception: ${e.message}", e)
+                        markFailed()
                         onResult?.invoke(false)
                     }
                 }
                 return
             }
         }
-        onResult?.invoke(true)
+        markFailed()
+        onResult?.invoke(false)
+    }
+
+    /** Sends a message that failed earlier, keeping its reply context. */
+    fun retryMessage(messageId: String) {
+        val failed = _messages.value.firstOrNull { it.id == messageId && it.status == "failed" } ?: return
+        _messages.update { list -> list.filterNot { it.id == messageId } }
+        val reply = failed.replyToId?.let {
+            Message(id = it, conversationId = failed.conversationId, senderName = failed.replyToName ?: "", text = failed.replyToText ?: "", timestamp = "", isOutgoing = false)
+        }
+        sendMessage(conversationId = failed.conversationId, text = failed.text, reply = reply)
+    }
+
+    fun startReply(message: Message) {
+        if (message.deleted || message.status == "failed") return
+        _replyingTo.value = message
+    }
+
+    fun cancelReply() {
+        _replyingTo.value = null
+    }
+
+    /** Deletes one of your own messages for everyone, or discards a message that never sent. */
+    fun deleteMessage(message: Message) {
+        if (!message.isOutgoing) return
+        if (message.id.startsWith("msg_")) {
+            _messages.update { list -> list.filterNot { it.id == message.id } }
+            return
+        }
+        val myUid = auth.currentUser?.uid ?: return
+        val partner = ConversationUtils.extractPartnerUid(myUid, message.conversationId)
+        val convId = ConversationUtils.getConversationId(myUid, partner)
+        viewModelScope.launch {
+            if (!userRepository.deleteMessage(convId, message.id)) {
+                _chatErrorMessage.value = "Could not delete the message. Try again."
+            }
+        }
+    }
+
+    /** Tells the other person that this conversation has been seen up to now. */
+    fun markChatSeen() {
+        val myUid = auth.currentUser?.uid ?: return
+        val partner = activeObservedPartnerUid ?: return
+        val convId = ConversationUtils.getConversationId(myUid, partner)
+        viewModelScope.launch { userRepository.markSeen(convId, myUid) }
+    }
+
+    private var typingJob: Job? = null
+    private var typingSent = false
+
+    private fun notifyTyping(active: Boolean) {
+        val myUid = auth.currentUser?.uid ?: return
+        val partner = activeObservedPartnerUid ?: return
+        val convId = ConversationUtils.getConversationId(myUid, partner)
+        if (convId.isBlank()) return
+        typingJob?.cancel()
+        if (active) {
+            if (!typingSent) {
+                typingSent = true
+                viewModelScope.launch { userRepository.setTyping(convId, myUid, true) }
+            }
+            // Typing state clears itself when the user stops.
+            typingJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(4000)
+                typingSent = false
+                userRepository.setTyping(convId, myUid, false)
+            }
+        } else if (typingSent) {
+            typingSent = false
+            viewModelScope.launch { userRepository.setTyping(convId, myUid, false) }
+        }
     }
 
     // Active Chat Client and Draft Message
@@ -798,6 +961,11 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.w("GlobalChatViewModel", "Could not ensure conversation doc: ${e.message}")
             }
+
+            _partnerTyping.value = false
+            _partnerReadAt.value = 0L
+            launch { userRepository.observeTyping(conversationId, resolvedPartnerUid).collect { _partnerTyping.value = it } }
+            launch { userRepository.observeReadAt(conversationId, resolvedPartnerUid).collect { _partnerReadAt.value = it } }
 
             userRepository.observeMessages(conversationId).collect { chatMessages ->
                 if (auth.currentUser?.uid != currentUid) return@collect
@@ -840,7 +1008,12 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                         isRead = true,
                         type = msg.type,
                         invoiceId = msg.invoiceId,
-                        invoiceCard = invoiceCard
+                        invoiceCard = invoiceCard,
+                        sentAtMillis = (msg.createdAt?.seconds ?: 0L) * 1000 + (msg.createdAt?.nanoseconds ?: 0) / 1_000_000,
+                        replyToId = msg.replyToId,
+                        replyToText = msg.replyToText,
+                        replyToName = msg.replyToName,
+                        deleted = msg.deleted
                     )
                 }
 
@@ -849,7 +1022,12 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                     // Retain any pending optimistic local messages that haven't yet reflected in RTDB snapshot
                     val localPending = currentList.filter { local ->
                         if (!local.isOutgoing || !local.id.startsWith("msg_")) return@filter false
+                        if (local.status == "failed") return@filter true
                         if (rtdbIds.contains(local.id)) return@filter false
+                        // A locally added invoice message is dropped once the real one has arrived.
+                        if (!local.invoiceId.isNullOrBlank()) {
+                            return@filter rtdbMessages.none { it.invoiceId == local.invoiceId }
+                        }
                         if (local.projectCard != null || local.meetingCard != null || local.invoiceCard != null) {
                             return@filter true
                         }
@@ -889,6 +1067,7 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
 
     fun setChatDraft(text: String) {
         _chatDraft.value = text
+        notifyTyping(text.isNotBlank())
     }
 
     fun sendCurrentMessage(targetClientId: String? = null, onComplete: ((Boolean) -> Unit)? = null) {
@@ -1413,25 +1592,15 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
                     val senderName = _userProfile.value?.displayName?.ifBlank { "You" } ?: "You"
                     val convForSend = conversationId.ifBlank { resolvedClientUid }
                     if (convForSend.isNotBlank()) {
-                        userRepository.sendInvoiceMessage(
+                        val delivered = userRepository.sendInvoiceMessage(
                             conversationId = convForSend,
                             senderName = senderName,
                             invoice = created
                         )
+                        if (!delivered) {
+                            _chatErrorMessage.value = "The invoice was saved but could not be sent to the chat. Check your connection and try again."
+                        }
                     }
-
-                    val newMsg = Message(
-                        id = "msg_${System.currentTimeMillis()}",
-                        conversationId = conversationId,
-                        senderName = "You",
-                        text = "Invoice: ${created.title} (${created.formatAmount()})",
-                        timestamp = "Just now",
-                        isOutgoing = true,
-                        type = "invoice_share",
-                        invoiceId = created.id,
-                        invoiceCard = created
-                    )
-                    _messages.update { (it + newMsg).distinctBy { m -> m.id } }
 
                     _inboxItems.update { list ->
                         list.map { item ->
@@ -1484,6 +1653,99 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    // ---- Invoices: edit and cancel (issuer only, while unpaid) ----
+
+    fun editInvoice(
+        invoiceId: String,
+        title: String,
+        amount: Double,
+        dueDate: String,
+        notes: String?,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        val current = _invoices.value.firstOrNull { it.id == invoiceId } ?: run { onResult(false); return }
+        if (current.organizerUid != auth.currentUser?.uid || current.isPaid) { onResult(false); return }
+        val cleanNotes = notes?.trim()?.takeIf { it.isNotEmpty() }
+        val updated = current.copy(title = title.trim(), amount = amount, dueDate = dueDate, notes = cleanNotes)
+        applyInvoiceChange(updated)
+        viewModelScope.launch {
+            val ok = userRepository.updateInvoiceDetails(invoiceId, updated.title, amount, dueDate, cleanNotes).isSuccess
+            if (!ok) applyInvoiceChange(current)
+            onResult(ok)
+        }
+    }
+
+    fun cancelInvoice(invoiceId: String, onResult: (Boolean) -> Unit = {}) {
+        val current = _invoices.value.firstOrNull { it.id == invoiceId } ?: run { onResult(false); return }
+        if (current.organizerUid != auth.currentUser?.uid || current.isPaid) { onResult(false); return }
+        applyInvoiceChange(current.copy(status = "CANCELLED", isPaid = false))
+        viewModelScope.launch {
+            val ok = userRepository.updateInvoicePaymentStatus(invoiceId, "CANCELLED", null).isSuccess
+            if (!ok) applyInvoiceChange(current)
+            onResult(ok)
+        }
+    }
+
+    private fun applyInvoiceChange(updated: Invoice) {
+        _invoices.update { list -> list.map { if (it.id == updated.id) updated else it } }
+        _messages.update { list ->
+            list.map { msg ->
+                if (msg.invoiceCard?.id == updated.id || msg.invoiceId == updated.id) msg.copy(invoiceCard = updated) else msg
+            }
+        }
+    }
+
+    // ---- Meetings: edit and cancel (organiser only) ----
+
+    fun editMeeting(
+        meeting: Meeting,
+        title: String,
+        notes: String?,
+        scheduledAtMillis: Long,
+        durationMinutes: Int,
+        onResult: (Boolean) -> Unit = {}
+    ) {
+        if (meeting.organizerUid != auth.currentUser?.uid || title.isBlank()) { onResult(false); return }
+        val zone = java.time.ZoneId.systemDefault()
+        val start = Instant.ofEpochMilli(scheduledAtMillis).atZone(zone)
+        val dateString = start.format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.US))
+        val timeString = start.format(java.time.format.DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.US))
+        val durationLabel = "$durationMinutes min"
+        val ts = com.google.firebase.Timestamp(java.util.Date(scheduledAtMillis))
+        val cleanNotes = notes?.trim()?.takeIf { it.isNotEmpty() }
+        val updated = meeting.copy(
+            title = title.trim(), notes = cleanNotes, scheduledAt = ts, durationMinutes = durationMinutes,
+            dateString = dateString, time = timeString, duration = durationLabel
+        )
+        _meetings.update { list -> list.map { if (it.id == meeting.id) updated else it } }
+        viewModelScope.launch {
+            val ok = userRepository.updateMeetingDetails(
+                meeting.id, updated.title, cleanNotes, ts, durationMinutes, dateString, timeString, durationLabel
+            ).isSuccess
+            if (!ok) _meetings.update { list -> list.map { if (it.id == meeting.id) meeting else it } }
+            onResult(ok)
+        }
+    }
+
+    fun cancelMeeting(meeting: Meeting, onResult: (Boolean) -> Unit = {}) {
+        if (meeting.organizerUid != auth.currentUser?.uid) { onResult(false); return }
+        _meetings.update { list -> list.map { if (it.id == meeting.id) it.copy(status = "Cancelled") else it } }
+        viewModelScope.launch {
+            val ok = userRepository.cancelMeeting(meeting.id).isSuccess
+            if (!ok) _meetings.update { list -> list.map { if (it.id == meeting.id) meeting else it } }
+            onResult(ok)
+        }
+    }
+
+    val currentUid: String? get() = auth.currentUser?.uid
+
+    val reminderLeadMinutes: Int get() = com.example.reminders.MeetingReminders.leadMinutes(getApplication())
+
+    fun setReminderLead(minutes: Int) {
+        com.example.reminders.MeetingReminders.setLeadMinutes(getApplication(), minutes)
+        com.example.reminders.MeetingReminders.sync(getApplication(), _meetings.value)
+    }
+
     fun markInvoicePaid(invoiceId: String) {
         val now = java.time.ZonedDateTime.now()
         val formatter = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a", java.util.Locale.US)
@@ -1533,7 +1795,11 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         meetingsJob = null
         invoicesJob?.cancel()
         invoicesJob = null
+        invoicesRemoteJob?.cancel()
+        invoicesRemoteJob = null
+        viewModelScope.launch { userRepository.clearLocalInvoices() }
         activeObservedPartnerUid = null
+        com.example.reminders.MeetingReminders.sync(getApplication(), emptyList())
         userRepository.clearCaches()
         _userProfile.value = null
         _clients.value = emptyList()
@@ -1545,6 +1811,9 @@ class GlobalChatViewModel(application: Application) : AndroidViewModel(applicati
         _invoices.value = emptyList()
         _notifications.value = emptyList()
         _chatDraft.value = ""
+        _replyingTo.value = null
+        _partnerTyping.value = false
+        _partnerReadAt.value = 0L
         _lastScheduledNotice.value = null
         _isSendingMessage.value = false
         _chatErrorMessage.value = null

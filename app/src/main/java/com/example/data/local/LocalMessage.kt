@@ -13,5 +13,9 @@ data class LocalMessage(
     val timestamp: Long,
     val isOutgoing: Boolean,
     val type: String = "text",
-    val invoiceId: String? = null
+    val invoiceId: String? = null,
+    val replyToId: String? = null,
+    val replyToText: String? = null,
+    val replyToName: String? = null,
+    val deleted: Boolean = false
 )

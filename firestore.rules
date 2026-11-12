@@ -1,59 +1,106 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function requestDoc(a, b) {
+      return /databases/$(database)/documents/chat_requests/$(a + '_' + b);
+    }
+
+    // True when the two users have an ACCEPTED chat request in either direction,
+    // evaluated against the state after the current write (so a batched accept works).
+    function connectedAfter(a, b) {
+      return (existsAfter(requestDoc(a, b)) && getAfter(requestDoc(a, b)).data.status == 'ACCEPTED')
+        || (existsAfter(requestDoc(b, a)) && getAfter(requestDoc(b, a)).data.status == 'ACCEPTED');
+    }
+
+    function connected(a, b) {
+      return (exists(requestDoc(a, b)) && get(requestDoc(a, b)).data.status == 'ACCEPTED')
+        || (exists(requestDoc(b, a)) && get(requestDoc(b, a)).data.status == 'ACCEPTED');
+    }
+
+    // Profiles hold the email address, so only the owner and accepted contacts may read them.
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read: if signedIn() && (request.auth.uid == userId || connected(request.auth.uid, userId));
+      allow create, update: if signedIn() && request.auth.uid == userId
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
 
       match /clients/{clientId} {
-        allow read, write: if request.auth != null && (request.auth.uid == userId || request.auth.uid == clientId);
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow write: if signedIn() && (
+          request.auth.uid == userId ||
+          (request.auth.uid == clientId && connectedAfter(userId, clientId))
+        );
       }
     }
 
+    // Username index used for "add client". It deliberately holds no email address.
     match /usernames/{username} {
-      allow read: if request.auth != null;
-      allow create, update: if request.auth != null && request.auth.uid == request.resource.data.uid;
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == request.resource.data.uid;
+      allow update: if signedIn() && request.auth.uid == resource.data.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
     }
 
     match /chat_requests/{requestId} {
-      allow read: if request.auth != null && (resource == null || resource.data.senderUid == request.auth.uid || resource.data.targetUid == request.auth.uid);
-      allow create: if request.auth != null && request.resource.data.senderUid == request.auth.uid;
-      allow update: if request.auth != null && (resource.data.targetUid == request.auth.uid || resource.data.senderUid == request.auth.uid) && request.resource.data.status in ['PENDING', 'ACCEPTED', 'DECLINED'];
+      allow read: if signedIn() && (
+        resource == null ||
+        resource.data.senderUid == request.auth.uid || resource.data.targetUid == request.auth.uid
+      );
+      // Only the sender can open a request, and it always starts as PENDING.
+      allow create: if signedIn()
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.targetUid is string
+        && request.resource.data.targetUid != request.auth.uid
+        && requestId == request.auth.uid + '_' + request.resource.data.targetUid
+        && request.resource.data.status == 'PENDING';
+      allow update: if signedIn() && (
+        // The recipient answers the request.
+        (resource.data.targetUid == request.auth.uid
+          && request.resource.data.senderUid == resource.data.senderUid
+          && request.resource.data.targetUid == resource.data.targetUid
+          && request.resource.data.status in ['ACCEPTED', 'DECLINED', 'PENDING'])
+        ||
+        // The sender may only re-open a request that was declined.
+        (resource.data.senderUid == request.auth.uid
+          && resource.data.status == 'DECLINED'
+          && request.resource.data.senderUid == resource.data.senderUid
+          && request.resource.data.targetUid == resource.data.targetUid
+          && request.resource.data.status == 'PENDING')
+      );
+      allow delete: if false;
     }
 
-    match /conversations/{conversationId} {
-      allow read: if request.auth != null && (resource == null || request.auth.uid in resource.data.participantUids);
-      allow create: if request.auth != null && request.auth.uid in request.resource.data.participantUids && request.resource.data.participantUids.size() == 2;
-      allow update: if request.auth != null && request.auth.uid in resource.data.participantUids;
-
-      match /messages/{messageId} {
-        allow read: if request.auth != null && (
-          (resource != null && 'participantUids' in resource.data && request.auth.uid in resource.data.participantUids) ||
-          (exists(/databases/$(database)/documents/conversations/$(conversationId)) && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids)
-        );
-        allow create: if request.auth != null && request.resource.data.senderUid == request.auth.uid && (
-          ('participantUids' in request.resource.data && request.auth.uid in request.resource.data.participantUids) ||
-          (exists(/databases/$(database)/documents/conversations/$(conversationId)) && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantUids)
-        );
-        allow update, delete: if false; // Messages are append-only
-      }
+    // Chat messages live in the Realtime Database (see database.rules.json).
+    match /conversations/{document=**} {
+      allow read, write: if false;
     }
 
     match /projects/{projectId} {
-      allow read: if request.auth != null && (
+      allow read: if signedIn() && (
         resource == null ||
         resource.data.ownerUid == request.auth.uid ||
         ('participantUids' in resource.data && request.auth.uid in resource.data.participantUids)
       );
-      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if request.auth != null && (
-        resource.data.ownerUid == request.auth.uid ||
-        ('participantUids' in resource.data && request.auth.uid in resource.data.participantUids)
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.auth.uid in request.resource.data.participantUids
+        && request.resource.data.participantUids.size() <= 50;
+      allow update: if signedIn() && (
+        // The owner can edit everything except ownership.
+        (resource.data.ownerUid == request.auth.uid
+          && request.resource.data.ownerUid == resource.data.ownerUid)
+        ||
+        // Other participants can only tick tasks off and move the status/progress.
+        (request.auth.uid in resource.data.participantUids
+          && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['tasks', 'progress', 'status', 'updatedAt']))
       );
-      allow delete: if request.auth != null && (
-        resource.data.ownerUid == request.auth.uid ||
-        ('participantUids' in resource.data && request.auth.uid in resource.data.participantUids)
-      );
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
     function isValidMeeting(data) {
@@ -63,7 +110,7 @@ service cloud.firestore {
         && data.organizerUid is string && data.organizerUid.size() > 0
         && data.participantUids is list && data.participantUids.size() > 0 && data.participantUids.size() <= 50
         && (data.durationMinutes is int || data.durationMinutes is number) && data.durationMinutes >= 1 && data.durationMinutes <= 480
-        && data.status is string && data.status in ['Confirmed', 'Pending', 'Declined', 'Awaiting response', 'confirmed', 'pending', 'declined']
+        && data.status is string && data.status in ['Confirmed', 'Pending', 'Declined', 'Awaiting response', 'Cancelled', 'confirmed', 'pending', 'declined']
         && (!('clientName' in data) || data.clientName == null || data.clientName is string)
         && (!('dateString' in data) || data.dateString == null || data.dateString is string)
         && (!('time' in data) || data.time == null || data.time is string)
@@ -111,7 +158,7 @@ service cloud.firestore {
         && data.participantUids is list && data.participantUids.size() > 0 && data.participantUids.size() <= 50
         && (data.amount is number || data.amount is int) && data.amount > 0
         && data.currencyCode is string && data.currencyCode in ['INR', 'USD', 'GBP']
-        && data.status is string && data.status in ['UNPAID', 'PAID']
+        && data.status is string && data.status in ['UNPAID', 'PAID', 'CANCELLED']
         && data.isPaid is bool
         && (!('invoiceNumber' in data) || data.invoiceNumber == null || data.invoiceNumber is string)
         && (!('clientName' in data) || data.clientName == null || data.clientName is string)

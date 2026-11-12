@@ -102,7 +102,13 @@ data class Message(
     val projectCard: Project? = null,
     val meetingCard: Meeting? = null,
     val invoiceId: String? = null,
-    val invoiceCard: Invoice? = null
+    val invoiceCard: Invoice? = null,
+    val status: String = "sent", // sending, sent, failed
+    val sentAtMillis: Long = 0L,
+    val replyToId: String? = null,
+    val replyToText: String? = null,
+    val replyToName: String? = null,
+    val deleted: Boolean = false
 )
 
 enum class ProjectStatus(val label: String) {

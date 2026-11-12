@@ -33,7 +33,7 @@ val AccentBlue = Color(0xFF2563EB)
 val AccentPurple = Color(0xFF7C3AED)
 
 // Dark Theme Surfaces & Backgrounds
-val DarkBackground = Color(0xFF0E0F0C)
+val DarkBackground = Color(0xFF000000)
 val DarkSurface = Color(0xFF181B16)
 val DarkSurfaceElevated = Color(0xFF222620)
 val DarkBorder = Color(0x2EFFFFFF)

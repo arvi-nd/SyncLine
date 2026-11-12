@@ -23,9 +23,10 @@ import androidx.compose.material.icons.outlined.Brightness4
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.automirrored.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.HelpOutline
-import androidx.compose.material.icons.outlined.Language
-import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +35,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -47,6 +51,8 @@ import com.example.components.WiseCard
 import com.example.ui.theme.GlobalChatTheme
 import com.example.viewmodel.GlobalChatViewModel
 
+private enum class SettingsDialog { NONE, NAME, TIMEZONE, HOURS, AVAILABILITY, REMINDERS }
+
 @Composable
 fun SettingsScreen(
     viewModel: GlobalChatViewModel,
@@ -56,6 +62,14 @@ fun SettingsScreen(
 ) {
     val colors = GlobalChatTheme.colors
     val isDark by viewModel.isDarkTheme.collectAsState()
+    var openDialog by remember { mutableStateOf(SettingsDialog.NONE) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    var reminderLead by remember { mutableStateOf(viewModel.reminderLeadMinutes) }
+    val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) notice = "Reminders need notification permission. You can allow it in the phone's app settings."
+    }
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -67,33 +81,18 @@ fun SettingsScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 12.dp)
         ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (onBack != null) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.testTag("settings_back_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = colors.textPrimary
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Text(
-                    text = "Settings",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colors.textPrimary
-                )
-            }
+            // Header: same place as the Overview title (it has a date line above it)
+            Spacer(modifier = Modifier.height(25.dp))
+            Text(
+                text = "Settings",
+                fontFamily = com.example.ui.theme.DisplayBlackFontFamily,
+                fontSize = 40.sp,
+                fontWeight = FontWeight.Black,
+                color = colors.textPrimary,
+                letterSpacing = (-1.2).sp
+            )
 
             Spacer(modifier = Modifier.height(20.dp))
 
@@ -110,11 +109,36 @@ fun SettingsScreen(
                 ?: "User Account"
 
             val initialText = nameText.take(2).uppercase()
+            val workStart = userProfile?.workingStartHour ?: 9
+            val workEnd = userProfile?.workingEndHour ?: 18
+            val availability = userProfile?.availability ?: "Available"
+            val save: (String?, String?, Int?, Int?, String?) -> Unit = { n, tz, ws, we, av ->
+                viewModel.updateProfileSettings(n, tz, ws, we, av) { ok ->
+                    notice = if (ok) "Saved." else "Could not save. Check your connection and try again."
+                }
+                openDialog = SettingsDialog.NONE
+            }
+            when (openDialog) {
+                SettingsDialog.NAME -> EditNameDialog(nameText, { openDialog = SettingsDialog.NONE }) { save(it, null, null, null, null) }
+                SettingsDialog.TIMEZONE -> TimezoneDialog(userProfile?.timezone.orEmpty(), { openDialog = SettingsDialog.NONE }) { save(null, it, null, null, null) }
+                SettingsDialog.HOURS -> WorkingHoursDialog(workStart, workEnd, { openDialog = SettingsDialog.NONE }) { st, en -> save(null, null, st, en, null) }
+                SettingsDialog.AVAILABILITY -> AvailabilityDialog(availability, { openDialog = SettingsDialog.NONE }) { save(null, null, null, null, it) }
+                SettingsDialog.REMINDERS -> ReminderLeadDialog(reminderLead, { openDialog = SettingsDialog.NONE }) { minutes ->
+                    reminderLead = minutes
+                    viewModel.setReminderLead(minutes)
+                    openDialog = SettingsDialog.NONE
+                    if (minutes > 0 && android.os.Build.VERSION.SDK_INT >= 33) {
+                        notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+                SettingsDialog.NONE -> {}
+            }
 
             // Profile Card
             WiseCard(
                 cornerRadius = 24.dp,
-                modifier = Modifier.fillMaxWidth()
+                onClick = { openDialog = SettingsDialog.NAME },
+                modifier = Modifier.fillMaxWidth().testTag("settings_profile_card")
             ) {
                 Row(
                     modifier = Modifier.padding(18.dp),
@@ -146,7 +170,7 @@ fun SettingsScreen(
                         if (currentUser != null) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Authenticated with Firebase",
+                                text = "Tap to edit your name",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = colors.brandLime
@@ -160,6 +184,11 @@ fun SettingsScreen(
                         tint = colors.textSecondary
                     )
                 }
+            }
+
+            notice?.let {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(text = it, fontSize = 13.sp, color = colors.textSecondary, modifier = Modifier.testTag("settings_notice"))
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -188,43 +217,55 @@ fun SettingsScreen(
                     )
 
                     SettingsRowItem(
-                        icon = Icons.Outlined.Language,
-                        title = "Language",
-                        value = "English",
-                        onClick = { }
-                    )
-
-                    SettingsRowItem(
-                        icon = Icons.Outlined.Notifications,
-                        title = "Notifications",
-                        value = "All notifications",
-                        onClick = { }
+                        icon = Icons.Outlined.Public,
+                        title = "Timezone",
+                        value = userProfile?.timezone?.takeIf { it.isNotBlank() }?.substringAfterLast('/')?.replace('_', ' ') ?: "Not set",
+                        onClick = { openDialog = SettingsDialog.TIMEZONE },
+                        testTag = "settings_row_timezone"
                     )
 
                     SettingsRowItem(
                         icon = Icons.Outlined.Schedule,
                         title = "Working hours",
-                        value = "9:00 AM - 6:00 PM",
-                        onClick = { }
+                        value = "${formatHourLabel(workStart)} - ${formatHourLabel(workEnd)}",
+                        onClick = { openDialog = SettingsDialog.HOURS },
+                        testTag = "settings_row_hours"
+                    )
+
+                    SettingsRowItem(
+                        icon = Icons.Outlined.Notifications,
+                        title = "Meeting reminders",
+                        value = com.example.reminders.MeetingReminders.label(reminderLead),
+                        onClick = { openDialog = SettingsDialog.REMINDERS },
+                        testTag = "settings_row_reminders"
                     )
 
                     SettingsRowItem(
                         icon = Icons.Outlined.CheckCircle,
                         title = "Availability",
-                        value = "Available",
-                        onClick = { }
+                        value = availability,
+                        onClick = { openDialog = SettingsDialog.AVAILABILITY },
+                        testTag = "settings_row_availability"
                     )
 
                     SettingsRowItem(
                         icon = Icons.Outlined.Lock,
-                        title = "Privacy & Security",
-                        onClick = { }
+                        title = "Change password",
+                        onClick = {
+                            viewModel.sendPasswordReset(
+                                emailStr = emailText,
+                                onSuccess = { notice = "Password reset link sent to $emailText." },
+                                onError = { notice = it }
+                            )
+                        },
+                        testTag = "settings_row_password"
                     )
 
                     SettingsRowItem(
-                        icon = Icons.Outlined.HelpOutline,
-                        title = "Help & Support",
-                        onClick = { }
+                        icon = Icons.Outlined.Info,
+                        title = "About SyncLine",
+                        value = "v${com.example.BuildConfig.VERSION_NAME}",
+                        onClick = { notice = "SyncLine ${com.example.BuildConfig.VERSION_NAME} · freelancer chat, projects, invoices and timezones." }
                     )
 
                     SettingsRowItem(

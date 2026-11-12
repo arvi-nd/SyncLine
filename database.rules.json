@@ -1,0 +1,61 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "conversations": {
+      "$cid": {
+        // A conversation id is "<uidA>_<uidB>" (sorted), so membership is read straight from the id.
+        ".read": "auth != null && ($cid.beginsWith(auth.uid + '_') || $cid.endsWith('_' + auth.uid))",
+        ".write": "auth != null && ($cid.beginsWith(auth.uid + '_') || $cid.endsWith('_' + auth.uid))",
+
+        "participants": {
+          "$uid": {
+            ".validate": "newData.val() === true && ($cid.beginsWith($uid + '_') || $cid.endsWith('_' + $uid))"
+          }
+        },
+
+        "messages": {
+          "$mid": {
+            // New messages must be sent as yourself; existing ones keep their sender.
+            ".validate": "newData.child('senderUid').val() === (data.exists() ? data.child('senderUid').val() : auth.uid)",
+            // Only the sender can change or blank out a message's text.
+            "text": {
+              ".validate": "newData.isString() && newData.val().length <= 2000 && (!data.exists() || data.val() === newData.val() || data.parent().child('senderUid').val() === auth.uid)"
+            },
+            "deleted": {
+              ".validate": "newData.isBoolean() && data.parent().child('senderUid').val() === auth.uid"
+            },
+            "replyTo": {
+              "text": { ".validate": "newData.isString() && newData.val().length <= 120" }
+            }
+          }
+        },
+
+        // Typing indicator and "seen" marker: each person only writes their own.
+        "typing": {
+          "$uid": {
+            ".validate": "$uid === auth.uid && newData.isBoolean()"
+          }
+        },
+        "readAt": {
+          "$uid": {
+            ".validate": "$uid === auth.uid && newData.isNumber()"
+          }
+        }
+      }
+    },
+
+    "userConversations": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$cid": {
+          // You can write your own inbox entry. The other participant may also write it,
+          // which is how a sender bumps your unread counter.
+          ".write": "auth != null && (auth.uid === $uid || (($cid.beginsWith(auth.uid + '_') || $cid.endsWith('_' + auth.uid)) && ($cid.beginsWith($uid + '_') || $cid.endsWith('_' + $uid))))",
+          ".validate": "$cid.beginsWith($uid + '_') || $cid.endsWith('_' + $uid)"
+        }
+      }
+    }
+  }
+}

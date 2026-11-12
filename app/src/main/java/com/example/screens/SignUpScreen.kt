@@ -52,6 +52,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.components.GoogleSignInButton
 import com.example.components.WisePillButton
 import com.example.ui.theme.GlobalChatTheme
 import com.example.viewmodel.GlobalChatViewModel
@@ -327,71 +328,12 @@ fun SignUpScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Social Sign Up: Google
-                Surface(
-                    onClick = onSignUpSuccess,
-                    shape = RoundedCornerShape(9999.dp),
-                    color = colors.cardBackground,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("signup_google_button")
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "G",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 18.sp,
-                            color = Color(0xFFEA4335)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Continue with Google",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
-                            color = colors.textPrimary
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Social Sign Up: Apple
-                Surface(
-                    onClick = onSignUpSuccess,
-                    shape = RoundedCornerShape(9999.dp),
-                    color = colors.cardBackground,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("signup_apple_button")
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp,
-                            color = colors.textPrimary
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Continue with Apple",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
-                            color = colors.textPrimary
-                        )
-                    }
-                }
+                GoogleSignInButton(
+                    viewModel = viewModel,
+                    onSuccess = onSignUpSuccess,
+                    onError = { errorMessage = it },
+                    testTag = "signup_google_button"
+                )
             }
 
             // Bottom Navigation to Login

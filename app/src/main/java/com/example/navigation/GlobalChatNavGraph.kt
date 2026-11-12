@@ -187,6 +187,9 @@ fun GlobalChatNavGraph(
                             invoicesList = userInvoices,
                             clientName = (activeChatConversationId ?: activeClientId).let { cid -> viewModel.getClient(cid)?.name ?: "Sarah Jenkins" },
                             clientUid = activeChatConversationId ?: activeClientId,
+                            currentUid = viewModel.currentUid,
+                            onEditMeeting = { m, t, n, ms, mins -> viewModel.editMeeting(m, t, n, ms, mins) },
+                            onCancelMeeting = { m -> viewModel.cancelMeeting(m) },
                             onScheduleMeetingDirect = { title, date, time, duration, durationMinutes, notes, scheduledAtMillis, attemptMeetingId, onSuccess, onError ->
                                 val scheduledTimestamp = if (scheduledAtMillis != null) {
                                     com.google.firebase.Timestamp(java.util.Date(scheduledAtMillis))
@@ -502,6 +505,9 @@ fun GlobalChatNavGraph(
                             meetingsList = userMeetings,
                             clientName = targetClient?.name ?: "Sarah Jenkins",
                             clientUid = clientId,
+                            currentUid = viewModel.currentUid,
+                            onEditMeeting = { m, t, n, ms, mins -> viewModel.editMeeting(m, t, n, ms, mins) },
+                            onCancelMeeting = { m -> viewModel.cancelMeeting(m) },
                             onScheduleMeetingDirect = { title, date, time, duration, durationMinutes, notes, scheduledAtMillis, attemptMeetingId, onSuccess, onError ->
                                 val scheduledTimestamp = if (scheduledAtMillis != null) {
                                     com.google.firebase.Timestamp(java.util.Date(scheduledAtMillis))

@@ -3,12 +3,16 @@ package com.example.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,7 +26,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -66,14 +72,18 @@ fun InboxScreen(
     val inboxItems by viewModel.inboxItems.collectAsState()
     val clients by viewModel.clients.collectAsState()
     val activeFilter by viewModel.inboxFilter.collectAsState()
+    val projects by viewModel.projects.collectAsState()
 
     var debugTapCount by remember { mutableIntStateOf(0) }
     var selectedFilterIndex by remember { mutableIntStateOf(0) }
 
     val unreadCount = inboxItems.count { it.unreadCount > 0 }
+    val projectChats = inboxItems.filter { item ->
+        projects.any { p -> p.clientUid == item.client.id || p.ownerUid == item.client.id || item.client.id in p.participantUids }
+    }
     val filteredList = when (selectedFilterIndex) {
         1 -> inboxItems.filter { it.unreadCount > 0 }
-        2 -> inboxItems.take(2)
+        2 -> projectChats
         else -> inboxItems
     }
 
@@ -84,16 +94,16 @@ fun InboxScreen(
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            // 1. Top Rounded Container: Wise Lime rounded rectangle covering from top down through filter pills
-            val topHeaderBg = WiseLime
+            // 1. Header panel: search pill, large title, contacts with an Add circle, filters
+            val headerShape = RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clip(headerShape)
                     .background(
-                        color = topHeaderBg,
-                        shape = RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp)
+                        Brush.verticalGradient(listOf(Color(0xFFB4F08C), WiseLime, Color(0xFF8EDB63))),
+                        headerShape
                     )
-                    .clip(RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp))
             ) {
                 Column(
                     modifier = Modifier
@@ -101,77 +111,86 @@ fun InboxScreen(
                         .statusBarsPadding()
                         .padding(bottom = 20.dp)
                 ) {
-                    // Header Row: "Inbox." + Search Button
-                    Row(
+                    // Search pill: opens the full search screen
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(horizontal = 20.dp, vertical = 10.dp)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(9999.dp))
+                            .background(Color.White.copy(alpha = 0.5f))
+                            .clickable(onClick = onOpenSearch)
+                            .testTag("inbox_search_button"),
+                        contentAlignment = Alignment.CenterStart
                     ) {
-                        Text(
-                            text = "Inbox.",
-                            fontFamily = com.example.ui.theme.DisplayBlackFontFamily,
-                            fontSize = 38.sp,
-                            fontWeight = FontWeight.Black,
-                            lineHeight = 38.sp,
-                            letterSpacing = (-1.5).sp,
-                            color = NearBlack,
-                            modifier = Modifier.clickable {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Search,
+                                contentDescription = null,
+                                tint = DarkGreen.copy(alpha = 0.75f),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Search",
+                                fontSize = 15.sp,
+                                color = DarkGreen.copy(alpha = 0.75f)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Inbox",
+                        fontFamily = com.example.ui.theme.DisplayBlackFontFamily,
+                        fontSize = 44.sp,
+                        fontWeight = FontWeight.Black,
+                        lineHeight = 44.sp,
+                        letterSpacing = (-1.5).sp,
+                        color = NearBlack,
+                        modifier = Modifier
+                            .padding(horizontal = 20.dp)
+                            .clickable {
                                 debugTapCount++
                                 if (debugTapCount >= 3) {
                                     debugTapCount = 0
                                     viewModel.openDebugDialog()
                                 }
                             }
-                        )
+                    )
 
-                        // Circular Search Button with translucent white circle
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.5f))
-                                .clickable(onClick = onOpenSearch)
-                                .testTag("inbox_search_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Search,
-                                contentDescription = "Search",
-                                tint = NearBlack,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
+                    Spacer(modifier = Modifier.height(18.dp))
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // 2. Horizontal Quick Client Avatars Row (Sarah, Kenji, Elena, David or added clients)
-                    if (clients.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 20.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            clients.take(4).forEach { client ->
-                                QuickAvatarItem(
-                                    client = client,
-                                    onClick = { onOpenChat(client.id) }
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-
-                    // 3. Filter Chips Row: All, Unread, Projects, Timezones
+                    // Contacts: an Add circle first (opens the Create sheet), then everyone you chat with
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 18.dp),
+                            .padding(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        AddContactItem(onClick = onOpenCreate)
+                        clients.forEach { client ->
+                            QuickAvatarItem(
+                                client = client,
+                                onClick = { onOpenChat(client.id) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(18.dp))
+
+                    // Filters
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterPillChip(
@@ -179,40 +198,28 @@ fun InboxScreen(
                             isSelected = selectedFilterIndex == 0,
                             onClick = { selectedFilterIndex = 0 }
                         )
-
                         FilterPillChip(
                             label = "Unread ($unreadCount)",
                             isSelected = selectedFilterIndex == 1,
                             onClick = { selectedFilterIndex = 1 }
                         )
-
                         FilterPillChip(
-                            label = "Projects",
+                            label = "Projects (${projectChats.size})",
                             isSelected = selectedFilterIndex == 2,
                             onClick = { selectedFilterIndex = 2 }
                         )
-
-                        FilterPillChip(
-                            label = "Timezones",
-                            isSelected = selectedFilterIndex == 3,
-                            onClick = { selectedFilterIndex = 3 }
-                        )
                     }
-
-                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
 
             // 4. Conversation Cards List
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    top = 12.dp,
+                    top = 8.dp,
                     bottom = 120.dp
                 ),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 if (filteredList.isEmpty()) {
                     item {
@@ -247,7 +254,8 @@ fun InboxScreen(
                     items(filteredList, key = { it.client.id }) { item ->
                         ExactConversationCard(
                             item = item,
-                            onClick = { onOpenChat(item.client.id) }
+                            onClick = { onOpenChat(item.client.id) },
+                            onToggleStar = { viewModel.toggleStar(item.client.id) }
                         )
                     }
                 }
@@ -256,56 +264,70 @@ fun InboxScreen(
     }
 }
 
-/**
- * Top Avatar item matching the prototype:
- * Circular avatar (SJ in soft dark green tint, Others in clean White circles), followed by Name, followed by Local Time.
- */
+@Composable
+fun AddContactItem(onClick: () -> Unit) {
+    val ring = DarkGreen.copy(alpha = 0.55f)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable(onClick = onClick).testTag("inbox_add_contact")
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .drawBehind {
+                    drawCircle(
+                        color = ring,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            width = 1.5.dp.toPx(),
+                            pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(9f, 9f))
+                        )
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Add contact",
+                tint = DarkGreen,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(text = "Add", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = NearBlack)
+    }
+}
+
+/** A contact in the header strip: round initial, first name, nothing else. */
 @Composable
 fun QuickAvatarItem(
     client: Client,
     onClick: () -> Unit
 ) {
-    val isLimeAvatar = client.avatarInitial == "SJ"
-    val avatarBg = if (isLimeAvatar) Color(0x28163300) else Color.White
-    val avatarTextColor = if (isLimeAvatar) DarkGreen else NearBlack
-
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp)
+        modifier = Modifier.clickable(onClick = onClick)
     ) {
         Box(
             modifier = Modifier
-                .size(52.dp)
+                .size(56.dp)
                 .clip(CircleShape)
-                .background(avatarBg),
+                .background(Color.White),
             contentAlignment = Alignment.Center
         ) {
             Text(
                 text = client.avatarInitial,
-                fontSize = 17.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                color = avatarTextColor
+                color = DarkGreen
             )
         }
-
         Spacer(modifier = Modifier.height(6.dp))
-
         Text(
             text = client.firstName,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = NearBlack
-        )
-
-        Spacer(modifier = Modifier.height(1.dp))
-
-        Text(
-            text = client.localTimeStr,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            color = Color(0xFF2C3C24)
+            color = NearBlack,
+            maxLines = 1
         )
     }
 }
@@ -329,12 +351,12 @@ fun FilterPillChip(
             .clip(RoundedCornerShape(9999.dp))
             .background(bg)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            fontSize = 12.5.sp,
+            fontSize = 13.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
             color = textCol
         )
@@ -350,125 +372,104 @@ fun FilterPillChip(
 @Composable
 fun ExactConversationCard(
     item: MockDataProvider.InboxItem,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onToggleStar: () -> Unit = {}
 ) {
     val colors = GlobalChatTheme.colors
-    val isLimeAvatar = item.client.avatarInitial == "SJ"
-    val avatarBg = if (isLimeAvatar) WiseLime else (if (colors.isDark) Color(0xFF222820) else Color(0xFFF0F3EC))
-    val avatarTextColor = if (isLimeAvatar) DarkGreen else colors.textPrimary
+    val avatarBg = if (colors.isDark) Color(0xFF222620) else Color.White
+    val unread = item.unreadCount > 0
 
-    WiseCard(
-        cornerRadius = 20.dp,
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Circular Avatar
+        // Avatar; the lime dot is a real state: the contact is inside their working hours now
+        Box(modifier = Modifier.size(52.dp)) {
             Box(
                 modifier = Modifier
-                    .size(46.dp)
+                    .fillMaxSize()
                     .clip(CircleShape)
                     .background(avatarBg)
-                    .then(
-                        if (!isLimeAvatar) Modifier.border(
-                            1.dp,
-                            if (colors.isDark) Color(0x33FFFFFF) else Color(0xFFDFE3DA),
-                            CircleShape
-                        ) else Modifier
-                    ),
+                    .border(0.5.dp, colors.cardBorder, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = item.client.avatarInitial,
-                    fontSize = 16.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
-                    color = avatarTextColor
+                    color = if (colors.isDark) WiseLime else DarkGreen
                 )
             }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            // Middle Column: Name, Status & Timezone, Last Message
-            Column(modifier = Modifier.weight(1f)) {
-                // Top row: Name & Time Ago
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = item.client.name,
-                        fontSize = 15.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = colors.textPrimary
-                    )
-
-                    Text(
-                        text = item.timestamp,
-                        fontSize = 12.sp,
-                        color = colors.textSecondary
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(2.dp))
-
-                // Middle line: Flag + City · Local Time (Working)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = item.client.flag,
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "${item.client.city} · ${item.client.localTimeStr} ",
-                        fontSize = 12.sp,
-                        color = colors.textSecondary
-                    )
-                    Text(
-                        text = "(${item.client.statusStr})",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (item.client.statusStr == "Working") {
-                            if (colors.isDark) WiseLime else SentimentPositive
-                        } else {
-                            colors.textSecondary
-                        }
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(3.dp))
-
-                // Bottom line: Message snippet
-                Text(
-                    text = item.lastMessage,
-                    fontSize = 13.sp,
-                    color = colors.textSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            // Right unread badge if unread
-            if (item.unreadCount > 0) {
-                Spacer(modifier = Modifier.width(8.dp))
+            if (item.client.statusStr == "Working") {
                 Box(
                     modifier = Modifier
-                        .size(20.dp)
-                        .clip(CircleShape)
-                        .background(WiseLime),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${item.unreadCount}",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = DarkGreen
-                    )
+                        .align(Alignment.BottomEnd)
+                        .size(14.dp)
+                        .background(colors.screenBackground, CircleShape)
+                        .padding(2.dp)
+                        .background(WiseLime, CircleShape)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(14.dp))
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = item.client.name,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = item.timestamp,
+                    fontSize = 12.sp,
+                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (unread) (if (colors.isDark) WiseLime else DarkGreen) else colors.textSecondary
+                )
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = item.lastMessage,
+                    fontSize = 14.sp,
+                    fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (unread) colors.textPrimary else colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (unread) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .defaultMinSize(minWidth = 22.dp, minHeight = 22.dp)
+                            .clip(CircleShape)
+                            .background(WiseLime)
+                            .padding(horizontal = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${item.unreadCount}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = DarkGreen
+                        )
+                    }
                 }
             }
         }

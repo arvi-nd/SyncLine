@@ -15,6 +15,10 @@ data class ChatMessage(
     val type: String = "text",
     val invoiceId: String? = null,
     val invoicePreview: Invoice? = null,
+    val replyToId: String? = null,
+    val replyToText: String? = null,
+    val replyToName: String? = null,
+    val deleted: Boolean = false,
     @ServerTimestamp val createdAt: Timestamp? = null
 )
 

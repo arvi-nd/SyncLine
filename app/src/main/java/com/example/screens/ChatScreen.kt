@@ -79,6 +79,20 @@ import java.util.Locale
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
+import com.example.invoice.InvoicePdf
+import com.example.components.ConfirmDialog
+import com.example.components.EditInvoiceDialog
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.filled.Reply
+import com.example.components.SwipeAction
+import com.example.components.SwipeRevealRow
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -120,7 +134,22 @@ fun ChatScreen(
 ) {
     val colors = GlobalChatTheme.colors
     val client = viewModel.getClient(clientId) ?: return
+    val inboxItems by viewModel.inboxItems.collectAsState()
+    val openChatUnread = inboxItems.firstOrNull { it.client.id == client.id }?.unreadCount ?: 0
+    androidx.compose.runtime.LaunchedEffect(client.id, openChatUnread) {
+        if (openChatUnread > 0) viewModel.markChatRead(client.id)
+    }
     val messages by viewModel.messages.collectAsState()
+    val replyingTo by viewModel.replyingTo.collectAsState()
+    val partnerTyping by viewModel.partnerTyping.collectAsState()
+    val partnerReadAt by viewModel.partnerReadAt.collectAsState()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var openSwipeId by remember { mutableStateOf<String?>(null) }
+    var editInvoiceTarget by remember { mutableStateOf<com.example.model.Invoice?>(null) }
+    var cancelInvoiceTarget by remember { mutableStateOf<com.example.model.Invoice?>(null) }
+    val toastContext = androidx.compose.ui.platform.LocalContext.current
+    val lastIncomingMillis = messages.lastOrNull { !it.isOutgoing }?.sentAtMillis ?: 0L
+    LaunchedEffect(client.id, lastIncomingMillis) { viewModel.markChatSeen() }
     val chatError by viewModel.chatErrorMessage.collectAsState()
     val isSending by viewModel.isSendingMessage.collectAsState()
     val density = LocalDensity.current
@@ -132,6 +161,8 @@ fun ChatScreen(
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = (messages.size - 1).coerceAtLeast(0)
     )
+
+    LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) openSwipeId = null }
 
     val prevMessageCount = remember(clientId) { mutableStateOf(messages.size) }
 
@@ -167,6 +198,33 @@ fun ChatScreen(
         if (messages.isNotEmpty()) {
             listState.scrollToItem((messages.size - 1).coerceAtLeast(0))
         }
+    }
+
+    editInvoiceTarget?.let { inv ->
+        EditInvoiceDialog(
+            invoice = inv,
+            onDismiss = { editInvoiceTarget = null },
+            onSave = { t, amt, due, n ->
+                editInvoiceTarget = null
+                viewModel.editInvoice(inv.id, t, amt, due, n) { ok ->
+                    if (!ok) android.widget.Toast.makeText(toastContext, "Could not update the invoice. Try again.", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+    cancelInvoiceTarget?.let { inv ->
+        ConfirmDialog(
+            title = "Cancel invoice ${inv.invoiceNumber}?",
+            message = "${inv.clientName} will see it as cancelled and can no longer pay it.",
+            confirmLabel = "Cancel invoice",
+            onConfirm = {
+                cancelInvoiceTarget = null
+                viewModel.cancelInvoice(inv.id) { ok ->
+                    if (!ok) android.widget.Toast.makeText(toastContext, "Could not cancel the invoice. If it keeps failing, publish the latest Firestore rules.", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { cancelInvoiceTarget = null }
+        )
     }
 
     Surface(
@@ -233,7 +291,7 @@ fun ChatScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${client.country} · $clientTime",
+                            text = "${client.country.takeIf { it != "Unknown location" } ?: client.city} · $clientTime",
                             fontSize = 12.sp,
                             color = colors.textSecondary,
                             maxLines = 1,
@@ -317,7 +375,7 @@ fun ChatScreen(
             val openProgress = chatOpenAnim.value
             val listOffsetY = ((-28f) * (1f - openProgress)).dp
             val listAlpha = (0.2f + 0.8f * openProgress).coerceIn(0f, 1f)
-            val dynamicBottomPadding = (bottomContentPadding + 4.dp).coerceAtLeast(8.dp)
+            val dynamicBottomPadding = if (replyingTo != null) 8.dp else (bottomContentPadding + 4.dp).coerceAtLeast(8.dp)
 
             // Messages List - anchored above navigation bar (Alignment.Bottom) with slide-down entry
             LazyColumn(
@@ -337,28 +395,166 @@ fun ChatScreen(
                     val isPrevSameSender = index > 0 && messages[index - 1].isOutgoing == msg.isOutgoing
                     val isNextSameSender = index < messages.size - 1 && messages[index + 1].isOutgoing == msg.isOutgoing
                     val isAlreadyAnimated = animatedMessageIds.contains(msg.id)
+                    val isLastOutgoing = msg.isOutgoing && messages.indexOfLast { it.isOutgoing } == index
+                    val isPlainText = msg.type == "text" && msg.projectCard == null && msg.meetingCard == null && msg.invoiceCard == null
 
-                    AnimatedMessageBubble(
-                        msg = msg,
-                        isPrevSameSender = isPrevSameSender,
-                        isNextSameSender = isNextSameSender,
-                        isAlreadyAnimated = isAlreadyAnimated,
-                        modifier = Modifier.animateItem(
-                            fadeInSpec = null,
-                            fadeOutSpec = null,
-                            placementSpec = spring(
-                                dampingRatio = 0.68f,
-                                stiffness = 240f
-                            )
-                        ),
-                        onAnimationComplete = { id ->
-                            if (!animatedMessageIds.contains(id)) {
-                                animatedMessageIds.add(id)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .animateItem(
+                                fadeInSpec = null,
+                                fadeOutSpec = null,
+                                placementSpec = spring(
+                                    dampingRatio = 0.68f,
+                                    stiffness = 240f
+                                )
+                            ),
+                        horizontalAlignment = if (msg.isOutgoing) Alignment.End else Alignment.Start
+                    ) {
+                        if (msg.replyToId != null && !msg.deleted) {
+                            ReplyQuote(name = msg.replyToName.orEmpty(), text = msg.replyToText.orEmpty())
+                        }
+
+                        val actions = buildList {
+                            if (msg.status == "failed") {
+                                add(SwipeAction(Icons.Default.Refresh, "Try again", WiseLime, DarkGreen, "swipe_action_retry") { viewModel.retryMessage(msg.id) })
+                            } else if (isPlainText && !msg.deleted) {
+                                add(SwipeAction(Icons.AutoMirrored.Filled.Reply, "Reply", WiseLime, DarkGreen, "swipe_action_reply") { viewModel.startReply(msg) })
+                                add(SwipeAction(Icons.Default.ContentCopy, "Copy", colors.cardBackground, colors.textPrimary, "swipe_action_copy") {
+                                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(msg.text))
+                                })
                             }
-                        },
-                        onMarkInvoicePaid = { invoiceId -> viewModel.markInvoicePaid(invoiceId) },
-                        onToggleTask = { projId, taskId -> viewModel.toggleTask(projId, taskId) }
-                    )
+                            val inv = msg.invoiceCard
+                            if (inv != null && msg.isOutgoing && inv.organizerUid == viewModel.currentUid &&
+                                !inv.isPaid && !inv.status.equals("CANCELLED", ignoreCase = true)
+                            ) {
+                                add(SwipeAction(Icons.Default.Edit, "Edit invoice", WiseLime, DarkGreen, "swipe_action_edit_invoice") { editInvoiceTarget = inv })
+                                add(SwipeAction(Icons.Default.Close, "Cancel invoice", colors.cardBackground, com.example.ui.theme.SentimentNegative, "swipe_action_cancel_invoice") { cancelInvoiceTarget = inv })
+                            }
+                            if (inv != null) {
+                                val issuer = if (inv.organizerUid == viewModel.currentUid) {
+                                    viewModel.userProfile.value?.displayName.orEmpty()
+                                } else client.name
+                                add(SwipeAction(Icons.Default.Share, "Share invoice PDF", colors.cardBackground, colors.textPrimary, "swipe_action_share_invoice") {
+                                    runCatching { InvoicePdf.share(toastContext, inv, issuer) }.onFailure {
+                                        android.widget.Toast.makeText(toastContext, "Could not create the PDF.", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                })
+                            }
+                            if (msg.isOutgoing && (isPlainText || msg.status == "failed") && !msg.deleted) {
+                                add(SwipeAction(Icons.Default.Delete, "Delete", colors.cardBackground, com.example.ui.theme.SentimentNegative, "swipe_action_delete") { viewModel.deleteMessage(msg) })
+                            }
+                        }
+
+                        SwipeRevealRow(
+                            isOpen = openSwipeId == msg.id,
+                            onOpenChange = { open ->
+                                if (open) openSwipeId = msg.id else if (openSwipeId == msg.id) openSwipeId = null
+                            },
+                            actions = actions,
+                            fromStart = !msg.isOutgoing,
+                            enabled = !msg.deleted,
+                            contentAlignment = if (msg.isOutgoing) Alignment.CenterEnd else Alignment.CenterStart
+                        ) {
+                            Box(
+                                modifier = Modifier.pointerInput(msg.id, msg.status) {
+                                    detectTapGestures(onTap = { if (msg.status == "failed") viewModel.retryMessage(msg.id) })
+                                }
+                            ) {
+                                if (msg.deleted) {
+                                    DeletedBubble()
+                                } else {
+                                    AnimatedMessageBubble(
+                                        msg = msg,
+                                        isPrevSameSender = isPrevSameSender,
+                                        isNextSameSender = isNextSameSender,
+                                        isAlreadyAnimated = isAlreadyAnimated,
+                                        modifier = Modifier,
+                                        onAnimationComplete = { id ->
+                                            if (!animatedMessageIds.contains(id)) {
+                                                animatedMessageIds.add(id)
+                                            }
+                                        },
+                                        onMarkInvoicePaid = { invoiceId -> viewModel.markInvoicePaid(invoiceId) },
+                                        onToggleTask = { projId, taskId -> viewModel.toggleTask(projId, taskId) }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (isLastOutgoing) {
+                            val label = when {
+                                msg.status == "failed" -> "Not sent · tap to try again"
+                                msg.status == "sending" -> "Sending…"
+                                msg.sentAtMillis in 1..partnerReadAt -> "Seen"
+                                else -> "Sent"
+                            }
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                color = if (msg.status == "failed") com.example.ui.theme.SentimentNegative else colors.textSecondary,
+                                modifier = Modifier
+                                    .padding(top = 2.dp, end = 6.dp)
+                                    .testTag("chat_status_label")
+                            )
+                        }
+                    }
+                }
+
+                if (partnerTyping) {
+                    item(key = "typing_indicator") {
+                        Text(
+                            text = "${client.firstName} is typing…",
+                            fontSize = 12.sp,
+                            color = colors.textSecondary,
+                            modifier = Modifier
+                                .padding(start = 6.dp, top = 2.dp)
+                                .testTag("chat_typing_indicator")
+                        )
+                    }
+                }
+            }
+
+            // Reply preview above the composer
+            replyingTo?.let { target ->
+                Surface(
+                    color = colors.cardBackground,
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = if (showInternalComposer) 6.dp else bottomContentPadding)
+                        .testTag("chat_reply_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Replying to ${if (target.isOutgoing) "yourself" else target.senderName}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary
+                            )
+                            Text(
+                                text = target.text,
+                                fontSize = 12.sp,
+                                color = colors.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = { viewModel.cancelReply() }) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Cancel reply",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -618,7 +814,7 @@ fun MessageBubbleRow(
             AttachmentBubble(attachment = msg.attachment, isOutgoing = msg.isOutgoing)
         }
 
-        if (msg.text.isNotEmpty()) {
+        if (msg.text.isNotEmpty() && !isInvoiceMessage) {
             val bubbleColor = if (msg.isOutgoing) colors.brandLime else colors.cardBackground
             val textColor = if (msg.isOutgoing) DarkGreen else colors.textPrimary
 
@@ -1027,6 +1223,7 @@ fun LargeInvoiceCardBubble(
     }
 
     val formattedAmount = invoice.formatAmount()
+    val isCancelled = invoice.status.equals("CANCELLED", ignoreCase = true)
 
     Surface(
         shape = RoundedCornerShape(22.dp),
@@ -1122,14 +1319,14 @@ fun LargeInvoiceCardBubble(
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFFD97706))
+                                    .background(if (isCancelled) colors.textSecondary else Color(0xFFD97706))
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "UNPAID",
+                                text = if (isCancelled) "CANCELLED" else "UNPAID",
                                 fontSize = 10.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFB45309)
+                                color = if (isCancelled) colors.textSecondary else Color(0xFFB45309)
                             )
                         }
                     }
@@ -1247,6 +1444,14 @@ fun LargeInvoiceCardBubble(
             Spacer(modifier = Modifier.height(14.dp))
 
             // Receiver Action Section (Paid Button or Paid State with Morphing Animation)
+            if (isCancelled) {
+                Text(
+                    text = "This invoice was cancelled",
+                    fontSize = 12.5.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                )
+            } else {
             AnimatedContent(
                 targetState = invoice.isPaid,
                 transitionSpec = {
@@ -1368,6 +1573,58 @@ fun LargeInvoiceCardBubble(
                     }
                 }
             }
+            }
         }
     }
+}
+
+@Composable
+private fun ReplyQuote(name: String, text: String) {
+    val colors = GlobalChatTheme.colors
+    Row(
+        modifier = Modifier
+            .padding(bottom = 2.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.cardBackground)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(26.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(WiseLime)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Column {
+            if (name.isNotBlank()) {
+                Text(text = name, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colors.textPrimary)
+            }
+            Text(
+                text = text,
+                fontSize = 12.sp,
+                color = colors.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 220.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun DeletedBubble() {
+    val colors = GlobalChatTheme.colors
+    Text(
+        text = "This message was deleted",
+        fontSize = 13.sp,
+        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+        color = colors.textSecondary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.cardBackground)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .testTag("chat_deleted_bubble")
+    )
 }

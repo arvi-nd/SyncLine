@@ -11,6 +11,7 @@ data class Conversation(
     val lastMessage: String = "",
     @ServerTimestamp val lastMessageAt: Timestamp? = null,
     val lastMessageSenderUid: String = "",
+    val unreadCount: Int = 0,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 )

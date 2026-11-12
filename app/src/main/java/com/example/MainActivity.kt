@@ -20,6 +20,20 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: GlobalChatViewModel by viewModels()
 
+    private val notificationPermission =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+
+    /** Asks once, after sign-in, so meeting reminders can be shown. */
+    private fun askForNotificationsOnce() {
+        if (Build.VERSION.SDK_INT < 33 || !viewModel.isUserAuthenticated) return
+        val prefs = getSharedPreferences("syncline_prefs", MODE_PRIVATE)
+        if (prefs.getBoolean("asked_notifications", false)) return
+        prefs.edit().putBoolean("asked_notifications", true).apply()
+        if (!com.example.reminders.MeetingReminders.canNotify(this)) {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         unlockHighRefreshRate()
@@ -41,6 +55,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         unlockHighRefreshRate()
+        askForNotificationsOnce()
     }
 
     private fun unlockHighRefreshRate() {

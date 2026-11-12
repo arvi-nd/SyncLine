@@ -29,6 +29,9 @@ interface InvoiceDao {
     @Query("UPDATE local_invoices SET status = :status, isPaid = :isPaid, paidAt = :paidAt WHERE id = :id")
     suspend fun updateInvoicePaymentStatus(id: String, status: String, isPaid: Boolean, paidAt: String?)
 
+    @Query("UPDATE local_invoices SET title = :title, amount = :amount, dueDate = :dueDate, notes = :notes WHERE id = :id")
+    suspend fun updateInvoiceDetails(id: String, title: String, amount: Double, dueDate: String, notes: String?)
+
     @Query("DELETE FROM local_invoices WHERE id = :id")
     suspend fun deleteInvoiceById(id: String)
 

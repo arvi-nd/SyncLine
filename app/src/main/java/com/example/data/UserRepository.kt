@@ -54,7 +54,6 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
     private val invoiceDao: InvoiceDao? = localDb?.invoiceDao()
 
     private val usersRef = db.collection("users")
-    private val conversationsRef = db.collection("conversations")
     private val requestsRef = db.collection("chat_requests")
     private val invoicesRef = db.collection("invoices")
 
@@ -80,9 +79,9 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         return verifiedConversations.contains(conversationId)
     }
 
-    suspend fun getProfile(uid: String): UserProfile? {
+    suspend fun getProfile(uid: String, forceRefresh: Boolean = false): UserProfile? {
         if (uid.isBlank()) return null
-        profileCache[uid]?.let { return it }
+        if (!forceRefresh) profileCache[uid]?.let { return it }
         return try {
             val doc = usersRef.document(uid).get().await()
             if (doc.exists()) {
@@ -116,13 +115,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             return true
         }
         return try {
-            val indexDoc = db.collection("usernames").document(clean).get().await()
-            if (indexDoc.exists()) {
-                false
-            } else {
-                val query = usersRef.whereEqualTo("username", clean).limit(1).get().await()
-                query.isEmpty
-            }
+            !db.collection("usernames").document(clean).get().await().exists()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e("UserRepository", "Error checking username availability: ${e.message}", e)
@@ -140,6 +133,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         return try {
             val existing = getProfile(uid)
             if (existing != null) {
+                ensureUsernameIndex(existing)
                 val updates = mutableMapOf<String, Any>()
                 if (existing.email.isBlank() && email.isNotBlank()) {
                     updates["email"] = email
@@ -147,10 +141,18 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                 if (existing.username.isBlank() && username.isNotBlank()) {
                     updates["username"] = username.trim().lowercase()
                 }
+                // Share the device timezone and country so contacts see real local times.
+                val deviceZone = java.util.TimeZone.getDefault().id
+                val deviceCountry = java.util.Locale.getDefault().country
+                if (existing.timezone.isBlank() && deviceZone.isNotBlank()) updates["timezone"] = deviceZone
+                if (existing.countryCode.isBlank() && deviceCountry.isNotBlank()) updates["countryCode"] = deviceCountry
                 if (updates.isNotEmpty()) {
                     updates["updatedAt"] = FieldValue.serverTimestamp()
                     usersRef.document(uid).update(updates).await()
+                    profileCache.remove(uid)
                     existing.copy(
+                        timezone = if (existing.timezone.isBlank()) deviceZone else existing.timezone,
+                        countryCode = if (existing.countryCode.isBlank()) deviceCountry else existing.countryCode,
                         email = if (existing.email.isBlank()) email else existing.email,
                         username = if (existing.username.isBlank()) username.trim().lowercase() else existing.username
                     )
@@ -162,8 +164,17 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                     email.substringBefore("@").replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
                 }.ifBlank { "User" }
 
-                val cleanUsername = username.trim().lowercase().ifBlank {
+                var cleanUsername = username.trim().lowercase().ifBlank {
                     email.substringBefore("@").lowercase().replace(Regex("[^a-z0-9_.]"), "")
+                }
+                // A username derived from an email (e.g. Google sign-in) may already be taken.
+                if (cleanUsername.length < 3) cleanUsername = "user$cleanUsername"
+                try {
+                    if (db.collection("usernames").document(cleanUsername).get().await().exists()) {
+                        cleanUsername += (100..999).random()
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                 }
 
                 val payload = mutableMapOf<String, Any?>(
@@ -171,6 +182,8 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                     "email" to email,
                     "displayName" to name,
                     "username" to cleanUsername,
+                    "timezone" to java.util.TimeZone.getDefault().id,
+                    "countryCode" to java.util.Locale.getDefault().country,
                     "createdAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
@@ -183,7 +196,6 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                             "uid" to uid,
                             "username" to cleanUsername,
                             "displayName" to name,
-                            "email" to email,
                             "updatedAt" to FieldValue.serverTimestamp()
                         )
                         db.collection("usernames").document(cleanUsername).set(indexDoc).await()
@@ -206,6 +218,27 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         }
     }
 
+    /** Older profiles may have no entry in the username index; create it once if it is free. */
+    private suspend fun ensureUsernameIndex(profile: UserProfile) {
+        val clean = profile.username.trim().lowercase()
+        if (clean.length < 3) return
+        try {
+            val ref = db.collection("usernames").document(clean)
+            if (!ref.get().await().exists()) {
+                ref.set(
+                    mapOf(
+                        "uid" to profile.uid,
+                        "username" to clean,
+                        "displayName" to profile.displayName,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+
     suspend fun getUserByUsername(username: String): UserProfile? {
         val clean = username.trim().lowercase()
         if (clean.length < 3) return null
@@ -217,16 +250,90 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                 val email = doc.getString("email") ?: ""
                 UserProfile(uid = cUid, displayName = name, username = clean, email = email)
             } else {
-                val query = usersRef.whereEqualTo("username", clean).limit(1).get().await()
-                if (!query.isEmpty) {
-                    query.documents.first().toObject(UserProfile::class.java)
-                } else {
-                    null
-                }
+                null
             }
         } catch (e: Exception) {
             Log.e("UserRepository", "Error getting user by username '$clean': ${e.message}", e)
             null
+        }
+    }
+
+    /**
+     * Writes both participants' inbox entries in one multi-path update: the sender's own entry
+     * (unread cleared) and the partner's entry (preview refreshed, unread counter incremented).
+     */
+    private fun putInboxEntries(
+        updates: MutableMap<String, Any>,
+        conversationId: String,
+        senderUid: String,
+        partnerUid: String,
+        preview: String
+    ) {
+        updates["userConversations/$senderUid/$conversationId"] = mapOf<String, Any>(
+            "id" to conversationId,
+            "partnerUid" to partnerUid,
+            "lastMessage" to preview,
+            "lastMessageAt" to ServerValue.TIMESTAMP,
+            "lastMessageSenderUid" to senderUid,
+            "unread" to 0
+        )
+        val partnerPath = "userConversations/$partnerUid/$conversationId"
+        updates["$partnerPath/id"] = conversationId
+        updates["$partnerPath/partnerUid"] = senderUid
+        updates["$partnerPath/lastMessage"] = preview
+        updates["$partnerPath/lastMessageAt"] = ServerValue.TIMESTAMP
+        updates["$partnerPath/lastMessageSenderUid"] = senderUid
+        updates["$partnerPath/unread"] = ServerValue.increment(1)
+    }
+
+    /** Clears the unread counter of a conversation for the signed-in user. */
+    suspend fun markConversationRead(myUid: String, conversationId: String) {
+        if (myUid.isBlank() || conversationId.isBlank()) return
+        try {
+            rtdb.getReference("userConversations/$myUid/$conversationId/unread").setValue(0).await()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error clearing unread for $conversationId: ${e.message}")
+        }
+    }
+
+    /** Saves the fields the user edits in Settings. Null arguments are left unchanged. */
+    suspend fun updateProfileSettings(
+        uid: String,
+        displayName: String? = null,
+        timezone: String? = null,
+        workingStartHour: Int? = null,
+        workingEndHour: Int? = null,
+        availability: String? = null
+    ): Boolean {
+        if (uid.isBlank()) return false
+        val updates = mutableMapOf<String, Any>()
+        displayName?.trim()?.takeIf { it.isNotEmpty() }?.let { updates["displayName"] = it }
+        timezone?.takeIf { it.isNotBlank() }?.let { updates["timezone"] = it }
+        workingStartHour?.let { updates["workingStartHour"] = it }
+        workingEndHour?.let { updates["workingEndHour"] = it }
+        availability?.let { updates["availability"] = it }
+        if (updates.isEmpty()) return true
+        updates["updatedAt"] = FieldValue.serverTimestamp()
+        return try {
+            usersRef.document(uid).update(updates).await()
+            profileCache.remove(uid)
+            // Keep the name in the username index in step so new contacts see the new name.
+            val newName = updates["displayName"] as? String
+            val username = getProfile(uid, forceRefresh = true)?.username?.trim()?.lowercase().orEmpty()
+            if (newName != null && username.length >= 3) {
+                try {
+                    db.collection("usernames").document(username)
+                        .update(mapOf("displayName" to newName, "updatedAt" to FieldValue.serverTimestamp())).await()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                }
+            }
+            true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error updating profile settings: ${e.message}", e)
+            false
         }
     }
 
@@ -402,7 +509,9 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         val conversationId = ConversationUtils.getConversationId(senderUid, targetUid)
 
         return try {
-            // 1. Update request status to ACCEPTED using merge so it succeeds even if missing prior
+            // Status change and both contact documents are committed together, so a half-accepted
+            // request can never exist.
+            val batch = db.batch()
             val updatePayload = mutableMapOf<String, Any>(
                 "status" to "ACCEPTED",
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -411,52 +520,37 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             if (targetUid.isNotBlank()) updatePayload["targetUid"] = targetUid
             if (request.senderUsername.isNotBlank()) updatePayload["senderUsername"] = request.senderUsername
             if (request.targetUsername.isNotBlank()) updatePayload["targetUsername"] = request.targetUsername
+            batch.set(requestRef, updatePayload, com.google.firebase.firestore.SetOptions.merge())
 
-            requestRef.set(updatePayload, com.google.firebase.firestore.SetOptions.merge()).await()
-
-            // 2. Add client to target user's clients subcollection
             if (targetUid.isNotBlank() && senderUid.isNotBlank()) {
-                try {
-                    val targetClientRef = usersRef.document(targetUid).collection("clients").document(senderUid)
-                    val existingTarget = try { targetClientRef.get().await() } catch (_: Exception) { null }
-                    val targetClientPayload = mutableMapOf<String, Any>(
+                batch.set(
+                    usersRef.document(targetUid).collection("clients").document(senderUid),
+                    mapOf(
                         "clientId" to senderUid,
                         "uid" to senderUid,
                         "username" to request.senderUsername,
                         "displayName" to request.senderDisplayName,
                         "email" to request.senderEmail,
+                        "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                    if (existingTarget == null || !existingTarget.exists() || existingTarget.get("createdAt") == null) {
-                        targetClientPayload["createdAt"] = FieldValue.serverTimestamp()
-                    }
-                    targetClientRef.set(targetClientPayload, com.google.firebase.firestore.SetOptions.merge()).await()
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    Log.e("UserRepository", "Non-fatal: could not write target client doc: ${e.message}")
-                }
-
-                // 3. Attempt sender client doc (also auto-healed on sender device via observeUserClients)
-                try {
-                    val senderClientRef = usersRef.document(senderUid).collection("clients").document(targetUid)
-                    val existingSender = try { senderClientRef.get().await() } catch (_: Exception) { null }
-                    val senderClientPayload = mutableMapOf<String, Any>(
+                    ),
+                    com.google.firebase.firestore.SetOptions.merge()
+                )
+                batch.set(
+                    usersRef.document(senderUid).collection("clients").document(targetUid),
+                    mapOf(
                         "clientId" to targetUid,
                         "uid" to targetUid,
                         "username" to request.targetUsername,
                         "displayName" to request.targetDisplayName,
                         "email" to request.targetEmail,
+                        "createdAt" to FieldValue.serverTimestamp(),
                         "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                    if (existingSender == null || !existingSender.exists() || existingSender.get("createdAt") == null) {
-                        senderClientPayload["createdAt"] = FieldValue.serverTimestamp()
-                    }
-                    senderClientRef.set(senderClientPayload, com.google.firebase.firestore.SetOptions.merge()).await()
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    Log.e("UserRepository", "Non-fatal: could not write sender client doc: ${e.message}")
-                }
+                    ),
+                    com.google.firebase.firestore.SetOptions.merge()
+                )
             }
+            batch.commit().await()
 
             // 4. Initialize shared conversation in RTDB and cache
             if (conversationId.isNotBlank()) {
@@ -466,15 +560,18 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                         "conversations/$conversationId/participants/$targetUid" to true,
                         "conversations/$conversationId/lastMessage" to "Chat request accepted",
                         "conversations/$conversationId/lastMessageAt" to ServerValue.TIMESTAMP,
-                        "conversations/$conversationId/lastMessageSenderUid" to targetUid,
-                        "userConversations/$targetUid/$conversationId" to mapOf(
+                        "conversations/$conversationId/lastMessageSenderUid" to targetUid
+                    )
+                    for ((owner, partner) in listOf(targetUid to senderUid, senderUid to targetUid)) {
+                        updates["userConversations/$owner/$conversationId"] = mapOf<String, Any>(
                             "id" to conversationId,
-                            "partnerUid" to senderUid,
+                            "partnerUid" to partner,
                             "lastMessage" to "Chat request accepted",
                             "lastMessageAt" to ServerValue.TIMESTAMP,
-                            "lastMessageSenderUid" to targetUid
+                            "lastMessageSenderUid" to targetUid,
+                            "unread" to 0
                         )
-                    )
+                    }
                     rtdb.reference.updateChildren(updates).await()
                     verifiedConversations.add(conversationId)
                     Log.d("SyncLineDiagnostics", "acceptChatRequest: initialized RTDB conversation $conversationId")
@@ -585,7 +682,10 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         senderUid: String,
         partnerUid: String = "",
         senderName: String,
-        text: String
+        text: String,
+        replyToId: String? = null,
+        replyToText: String? = null,
+        replyToName: String? = null
     ): Boolean {
         val cleanText = text.trim()
         if (conversationId.isBlank() || senderUid.isBlank() || cleanText.isBlank()) {
@@ -614,12 +714,14 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             return false
         }
 
+        var failedMsgId: String? = null
         return try {
             val messagesRef = rtdb.getReference("conversations").child(conversationId).child("messages")
             val newMsgRef = messagesRef.push()
             val msgId = newMsgRef.key ?: "msg_${System.currentTimeMillis()}"
+            failedMsgId = msgId
 
-            val msgPayload = mapOf<String, Any>(
+            val msgPayload = mutableMapOf<String, Any>(
                 "id" to msgId,
                 "conversationId" to conversationId,
                 "senderUid" to senderUid,
@@ -627,6 +729,13 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                 "text" to cleanText,
                 "createdAt" to ServerValue.TIMESTAMP
             )
+            if (!replyToId.isNullOrBlank()) {
+                msgPayload["replyTo"] = mapOf(
+                    "id" to replyToId,
+                    "text" to (replyToText ?: "").take(120),
+                    "name" to (replyToName ?: "")
+                )
+            }
 
             // Save outgoing message to local Room database
             messageDao?.insertMessage(
@@ -637,7 +746,10 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                     senderName = senderName,
                     text = cleanText,
                     timestamp = System.currentTimeMillis(),
-                    isOutgoing = true
+                    isOutgoing = true,
+                    replyToId = replyToId?.takeIf { it.isNotBlank() },
+                    replyToText = replyToText?.take(120),
+                    replyToName = replyToName
                 )
             )
 
@@ -655,14 +767,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             updates["conversations/$conversationId/lastMessageSenderUid"] = senderUid
 
             // Sender's own summary entry
-            val metaSender = mapOf<String, Any>(
-                "id" to conversationId,
-                "partnerUid" to resolvedPartnerUid,
-                "lastMessage" to cleanText,
-                "lastMessageAt" to ServerValue.TIMESTAMP,
-                "lastMessageSenderUid" to senderUid
-            )
-            updates["userConversations/$senderUid/$conversationId"] = metaSender
+            putInboxEntries(updates, conversationId, senderUid, resolvedPartnerUid, cleanText)
 
             rtdb.reference.updateChildren(updates).await()
             verifiedConversations.add(conversationId)
@@ -671,6 +776,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e("SyncLineDiagnostics", "[RTDB_SEND_FAIL] Exception: ${e.javaClass.simpleName}, Msg: ${e.message}", e)
+            failedMsgId?.let { try { messageDao?.deleteMessageById(it) } catch (_: Exception) {} }
             false
         }
     }
@@ -701,6 +807,10 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                     val createdEpoch = child.child("createdAt").getValue(Long::class.java) ?: System.currentTimeMillis()
                     val type = child.child("type").getValue(String::class.java) ?: "text"
                     val invId = child.child("invoiceId").getValue(String::class.java)
+                    val isDeleted = child.child("deleted").getValue(Boolean::class.java) == true
+                    val replyToId = child.child("replyTo").child("id").getValue(String::class.java)
+                    val replyToText = child.child("replyTo").child("text").getValue(String::class.java)
+                    val replyToName = child.child("replyTo").child("name").getValue(String::class.java)
 
                     var parsedPreviewInvoice: Invoice? = null
                     if (type == "invoice_share" && child.hasChild("invoicePreview")) {
@@ -782,11 +892,15 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                                 conversationId = cId,
                                 senderUid = sUid,
                                 senderName = sName,
-                                text = txt,
+                                text = if (isDeleted) "" else txt,
                                 timestamp = createdEpoch,
                                 isOutgoing = (sUid == currentUid),
                                 type = type,
-                                invoiceId = invId
+                                invoiceId = invId,
+                                replyToId = replyToId,
+                                replyToText = replyToText,
+                                replyToName = replyToName,
+                                deleted = isDeleted
                             )
                         )
                     }
@@ -850,7 +964,11 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                             type = local.type,
                             invoiceId = local.invoiceId,
                             invoicePreview = invCardPreview,
-                            createdAt = com.google.firebase.Timestamp(local.timestamp / 1000, 0)
+                            replyToId = local.replyToId,
+                            replyToText = local.replyToText,
+                            replyToName = local.replyToName,
+                            deleted = local.deleted,
+                            createdAt = com.google.firebase.Timestamp(local.timestamp / 1000, ((local.timestamp % 1000) * 1_000_000).toInt())
                         )
                     }.sortedWith(
                         compareBy<ChatMessage> { it.createdAt?.seconds ?: Long.MAX_VALUE }
@@ -870,6 +988,75 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         }
     }
 
+
+    /** Soft-deletes one of your own messages: it stays in the thread as "This message was deleted". */
+    suspend fun deleteMessage(conversationId: String, messageId: String): Boolean {
+        if (conversationId.isBlank() || messageId.isBlank()) return false
+        return try {
+            rtdb.reference.updateChildren(
+                mapOf(
+                    "conversations/$conversationId/messages/$messageId/deleted" to true,
+                    "conversations/$conversationId/messages/$messageId/text" to ""
+                )
+            ).await()
+            true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error deleting message $messageId: ${e.message}")
+            false
+        }
+    }
+
+    /** Whether the other person is typing in this conversation right now. */
+    fun observeTyping(conversationId: String, partnerUid: String): Flow<Boolean> = callbackFlow {
+        val ref = rtdb.getReference("conversations/$conversationId/typing/$partnerUid")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                trySend(snapshot.getValue(Boolean::class.java) == true)
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    /** The moment (epoch millis) the other person last had this conversation open. */
+    fun observeReadAt(conversationId: String, partnerUid: String): Flow<Long> = callbackFlow {
+        val ref = rtdb.getReference("conversations/$conversationId/readAt/$partnerUid")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                trySend(snapshot.getValue(Long::class.java) ?: 0L)
+            }
+            override fun onCancelled(error: DatabaseError) {}
+        }
+        ref.addValueEventListener(listener)
+        awaitClose { ref.removeEventListener(listener) }
+    }
+
+    suspend fun setTyping(conversationId: String, myUid: String, typing: Boolean) {
+        if (conversationId.isBlank() || myUid.isBlank()) return
+        try {
+            val ref = rtdb.getReference("conversations/$conversationId/typing/$myUid")
+            if (typing) {
+                ref.onDisconnect().removeValue()
+                ref.setValue(true).await()
+            } else {
+                ref.removeValue().await()
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+
+    suspend fun markSeen(conversationId: String, myUid: String) {
+        if (conversationId.isBlank() || myUid.isBlank()) return
+        try {
+            rtdb.getReference("conversations/$conversationId/readAt/$myUid").setValue(ServerValue.TIMESTAMP).await()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+
     /**
      * Observes real-time user conversations from Firebase Realtime Database for inbox sorting and bilateral discovery.
      */
@@ -882,17 +1069,11 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
 
         Log.d("SyncLineDiagnostics", "observeUserConversations: registering RTDB listener for myUid=$myUid")
         val userConvRef = rtdb.getReference("userConversations").child(myUid)
-        val convsRef = rtdb.getReference("conversations")
 
         var userConvList = emptyList<Conversation>()
-        var sharedConvList = emptyList<Conversation>()
 
         fun emitCombined() {
             val mergedMap = mutableMapOf<String, Conversation>()
-
-            for (conv in sharedConvList) {
-                mergedMap[conv.id] = conv
-            }
 
             for (conv in userConvList) {
                 mergedMap[conv.id] = conv
@@ -911,6 +1092,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                     val lastMsg = child.child("lastMessage").getValue(String::class.java) ?: ""
                     val lastMsgAt = child.child("lastMessageAt").getValue(Long::class.java)
                     val lastSenderUid = child.child("lastMessageSenderUid").getValue(String::class.java) ?: ""
+                    val unread = (child.child("unread").getValue(Long::class.java) ?: 0L).toInt().coerceAtLeast(0)
                     val timestamp = if (lastMsgAt != null) com.google.firebase.Timestamp(lastMsgAt / 1000, 0) else null
 
                     val participants = if (partnerUid.isNotBlank()) {
@@ -931,7 +1113,8 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                             participantUids = participants,
                             lastMessage = lastMsg,
                             lastMessageAt = timestamp,
-                            lastMessageSenderUid = lastSenderUid
+                            lastMessageSenderUid = lastSenderUid,
+                            unreadCount = unread
                         )
                     )
                 }
@@ -944,51 +1127,10 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             }
         }
 
-        val sharedListener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val list = mutableListOf<Conversation>()
-                for (child in snapshot.children) {
-                    val convId = child.key ?: ""
-                    val isParticipantInTree = child.child("participants").child(myUid).getValue(Boolean::class.java) == true
-                    val isParticipantInKey = ConversationUtils.extractPartnerUid(myUid, convId).isNotBlank() && convId.contains(myUid)
-
-                    if (isParticipantInTree || isParticipantInKey) {
-                        val lastMsg = child.child("lastMessage").getValue(String::class.java) ?: ""
-                        val lastMsgAt = child.child("lastMessageAt").getValue(Long::class.java)
-                        val lastSenderUid = child.child("lastMessageSenderUid").getValue(String::class.java) ?: ""
-                        val timestamp = if (lastMsgAt != null) com.google.firebase.Timestamp(lastMsgAt / 1000, 0) else null
-                        val partnerUid = ConversationUtils.extractPartnerUid(myUid, convId)
-
-                        if (convId.isNotBlank()) {
-                            verifiedConversations.add(convId)
-                        }
-
-                        list.add(
-                            Conversation(
-                                id = convId,
-                                participantUids = listOf(myUid, partnerUid).sorted(),
-                                lastMessage = lastMsg,
-                                lastMessageAt = timestamp,
-                                lastMessageSenderUid = lastSenderUid
-                            )
-                        )
-                    }
-                }
-                sharedConvList = list
-                emitCombined()
-            }
-
-            override fun onCancelled(error: DatabaseError) {
-                Log.e("SyncLineDiagnostics", "RTDB observeSharedConversations cancelled for $myUid: ${error.message}")
-            }
-        }
-
         userConvRef.addValueEventListener(userListener)
-        convsRef.addValueEventListener(sharedListener)
 
         awaitClose {
             userConvRef.removeEventListener(userListener)
-            convsRef.removeEventListener(sharedListener)
         }
     }
 
@@ -1007,9 +1149,10 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             ConversationUtils.extractPartnerUid(senderUid, conversationId)
         }
 
-        val convIdToUse = if (conversationId.isNotBlank()) conversationId else {
-            if (resolvedPartnerUid.isNotBlank()) ConversationUtils.getConversationId(senderUid, resolvedPartnerUid) else ""
-        }
+        // The caller may pass just the other person's id; chat rules only accept "<uidA>_<uidB>".
+        val convIdToUse = if (resolvedPartnerUid.isNotBlank()) {
+            ConversationUtils.getConversationId(senderUid, resolvedPartnerUid)
+        } else conversationId
         if (convIdToUse.isBlank()) return false
 
         return try {
@@ -1058,14 +1201,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             updates["conversations/$conversationId/lastMessageAt"] = ServerValue.TIMESTAMP
             updates["conversations/$conversationId/lastMessageSenderUid"] = senderUid
 
-            val metaSender = mapOf<String, Any>(
-                "id" to conversationId,
-                "partnerUid" to resolvedPartnerUid,
-                "lastMessage" to "Project: ${project.title}",
-                "lastMessageAt" to ServerValue.TIMESTAMP,
-                "lastMessageSenderUid" to senderUid
-            )
-            updates["userConversations/$senderUid/$conversationId"] = metaSender
+            putInboxEntries(updates, conversationId, senderUid, resolvedPartnerUid, "Project: ${project.title}")
 
             rtdb.reference.updateChildren(updates).await()
             verifiedConversations.add(conversationId)
@@ -1536,6 +1672,9 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         if (senderUid == null || conversationId.isBlank()) return false
 
         val resolvedPartnerUid = ConversationUtils.extractPartnerUid(senderUid, conversationId)
+        // The caller may pass just the other person's id; chat rules only accept "<uidA>_<uidB>".
+        val conversationId = ConversationUtils.getConversationId(senderUid, resolvedPartnerUid)
+        if (conversationId.isBlank()) return false
 
         return try {
             val messagesRef = rtdb.getReference("conversations").child(conversationId).child("messages")
@@ -1569,7 +1708,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                 "conversationId" to conversationId,
                 "senderUid" to senderUid,
                 "senderName" to senderName,
-                "text" to cleanText,
+                "text" to "", // the card is the message; cleanText is only the inbox preview
                 "type" to "invoice_share",
                 "invoiceId" to invoice.id,
                 "invoicePreview" to invoicePreviewMap,
@@ -1583,7 +1722,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                     conversationId = conversationId,
                     senderUid = senderUid,
                     senderName = senderName,
-                    text = cleanText,
+                    text = "",
                     timestamp = System.currentTimeMillis(),
                     isOutgoing = true,
                     type = "invoice_share",
@@ -1602,14 +1741,7 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             updates["conversations/$conversationId/lastMessageAt"] = ServerValue.TIMESTAMP
             updates["conversations/$conversationId/lastMessageSenderUid"] = senderUid
 
-            val metaSender = mapOf<String, Any>(
-                "id" to conversationId,
-                "partnerUid" to resolvedPartnerUid,
-                "lastMessage" to cleanText,
-                "lastMessageAt" to ServerValue.TIMESTAMP,
-                "lastMessageSenderUid" to senderUid
-            )
-            updates["userConversations/$senderUid/$conversationId"] = metaSender
+            putInboxEntries(updates, conversationId, senderUid, resolvedPartnerUid, cleanText)
 
             rtdb.reference.updateChildren(updates).await()
             verifiedConversations.add(conversationId)
@@ -1653,6 +1785,77 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e("UserRepository", "Error updating invoice payment status: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /** Edits the details of an invoice you issued. Everyone on the invoice sees the change live. */
+    suspend fun updateInvoiceDetails(
+        invoiceId: String,
+        title: String,
+        amount: Double,
+        dueDate: String,
+        notes: String?
+    ): Result<Unit> {
+        return try {
+            val updates = mutableMapOf<String, Any>(
+                "title" to title,
+                "amount" to amount,
+                "dueDate" to dueDate,
+                "notes" to (notes ?: ""),
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            invoicesRef.document(invoiceId).update(updates).await()
+            invoiceDao?.updateInvoiceDetails(invoiceId, title, amount, dueDate, notes?.takeIf { it.isNotBlank() })
+            Result.success(Unit)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error updating invoice $invoiceId: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /** Edits a meeting you organise. Participants see the new time and title live. */
+    suspend fun updateMeetingDetails(
+        meetingId: String,
+        title: String,
+        notes: String?,
+        scheduledAt: com.google.firebase.Timestamp,
+        durationMinutes: Int,
+        dateString: String,
+        time: String,
+        duration: String
+    ): Result<Unit> {
+        return try {
+            val updates = mutableMapOf<String, Any>(
+                "title" to title,
+                "description" to (notes ?: ""),
+                "scheduledAt" to scheduledAt,
+                "durationMinutes" to durationMinutes,
+                "dateString" to dateString,
+                "time" to time,
+                "duration" to duration,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            meetingsRef.document(meetingId).update(updates).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error updating meeting $meetingId: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /** Marks a meeting as cancelled but keeps it, so participants see that it was called off. */
+    suspend fun cancelMeeting(meetingId: String): Result<Unit> {
+        return try {
+            meetingsRef.document(meetingId).update(
+                mapOf("status" to "Cancelled", "updatedAt" to FieldValue.serverTimestamp())
+            ).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error cancelling meeting $meetingId: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -1741,12 +1944,65 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                         status = local.status,
                         isPaid = local.isPaid,
                         paidAt = local.paidAt,
-                        createdAt = local.createdAt
+                        createdAt = local.createdAt,
+                        createdAtTs = com.google.firebase.Timestamp(java.util.Date(local.createdAtMillis))
                     )
                 }
             }
         }
         return flowOf(emptyList())
+    }
+
+    /** Live view of every invoice you issued or were billed for, straight from the shared database. */
+    fun observeInvoicesRemote(uid: String): Flow<List<Invoice>> {
+        if (uid.isBlank()) return flowOf(emptyList())
+        return invoicesRef.whereArrayContains("participantUids", uid)
+            .snapshots()
+            .map { snapshot -> snapshot.documents.mapNotNull { parseInvoiceFromDoc(it) } }
+            .catch { e ->
+                Log.e("UserRepository", "Error observing invoices for $uid: ${e.message}", e)
+                emit(emptyList())
+            }
+    }
+
+    /** Writes invoices received from the shared database into the local cache the UI reads from. */
+    suspend fun cacheInvoices(invoices: List<Invoice>) {
+        val dao = invoiceDao ?: return
+        if (invoices.isEmpty()) return
+        try {
+            dao.insertInvoices(invoices.map { inv ->
+                val created = inv.createdAtTs?.toDate()?.time
+                    ?: dao.getInvoiceByIdSync(inv.id)?.createdAtMillis
+                    ?: System.currentTimeMillis()
+                LocalInvoice(
+                    id = inv.id,
+                    invoiceNumber = inv.invoiceNumber,
+                    title = inv.title,
+                    clientName = inv.clientName,
+                    clientUid = inv.clientUid,
+                    organizerUid = inv.organizerUid,
+                    projectId = inv.projectId,
+                    projectName = inv.projectName,
+                    amount = inv.amount,
+                    currencyCode = inv.currencyCode,
+                    dueDate = inv.dueDate,
+                    notes = inv.notes,
+                    status = inv.status,
+                    isPaid = inv.isPaid,
+                    paidAt = inv.paidAt,
+                    createdAt = inv.createdAt,
+                    createdAtMillis = created
+                )
+            })
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e("UserRepository", "Error caching invoices: ${e.message}")
+        }
+    }
+
+    /** Forget cached invoices when the account changes so one account never sees another's. */
+    suspend fun clearLocalInvoices() {
+        try { invoiceDao?.clearAll() } catch (_: Exception) {}
     }
 
     fun observeAllInvoices(): Flow<List<Invoice>> {
@@ -1771,7 +2027,8 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
                         status = local.status,
                         isPaid = local.isPaid,
                         paidAt = local.paidAt,
-                        createdAt = local.createdAt
+                        createdAt = local.createdAt,
+                        createdAtTs = com.google.firebase.Timestamp(java.util.Date(local.createdAtMillis))
                     )
                 }
             }
@@ -1817,7 +2074,8 @@ class UserRepository(private val db: FirebaseFirestore, context: Context? = null
             status = status,
             isPaid = isPaid,
             paidAt = paidAt,
-            createdAt = createdAt
+            createdAt = createdAt,
+            createdAtTs = doc.getTimestamp("createdAtTs")
         )
     }
 }
