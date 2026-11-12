@@ -302,26 +302,7 @@ object MockDataProvider {
         TimezoneCity("tz6", "Sydney", "Australia", "Australia/Sydney", "🇦🇺")
     )
 
-    val calendarMeetings = listOf(
-        Meeting(
-            id = "mt1",
-            title = "Client Call - Sarah Jenkins",
-            clientName = "Sarah Jenkins",
-            time = "12:45 PM",
-            duration = "30m",
-            isOnline = true,
-            dateString = "2025-05-28"
-        ),
-        Meeting(
-            id = "mt2",
-            title = "Design Review - Acme Co.",
-            clientName = "Acme Co.",
-            time = "2:00 PM",
-            duration = "1h",
-            isOnline = true,
-            dateString = "2025-05-28"
-        )
-    )
+    val calendarMeetings = emptyList<Meeting>()
 
     val initialNotifications = listOf(
         NotificationItem(

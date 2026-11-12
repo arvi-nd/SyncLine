@@ -1,5 +1,6 @@
 package com.example.screens
 
+import com.example.model.formatAmount
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.PaddingValues
@@ -22,12 +25,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -42,6 +53,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FileDownload
@@ -62,6 +74,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.scale
 import com.example.model.Invoice
+import com.example.model.getDisplayTime
 import java.util.Locale
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +85,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -106,15 +121,51 @@ fun ChatScreen(
     val colors = GlobalChatTheme.colors
     val client = viewModel.getClient(clientId) ?: return
     val messages by viewModel.messages.collectAsState()
-    val listState = rememberLazyListState()
+    val chatError by viewModel.chatErrorMessage.collectAsState()
+    val isSending by viewModel.isSendingMessage.collectAsState()
+    val density = LocalDensity.current
+    val imeBottomPx = WindowInsets.ime.getBottom(density)
+    val imeBottomDp = with(density) { imeBottomPx.toDp() }
+    val isKeyboardOpen = imeBottomPx > 0
+
+    // Initialize listState already scrolled to the bottom (most recent messages) on frame 0
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = (messages.size - 1).coerceAtLeast(0)
+    )
+
+    val prevMessageCount = remember(clientId) { mutableStateOf(messages.size) }
 
     var composerText by remember { mutableStateOf("") }
 
     val clientTime = TimezoneEngine.formatCurrentTime(client.timezoneId)
 
+    val chatOpenAnim = remember(clientId) { Animatable(0f) }
+
+    LaunchedEffect(clientId) {
+        viewModel.setActiveChatClient(clientId)
+        chatOpenAnim.snapTo(0f)
+        chatOpenAnim.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(
+                dampingRatio = 0.72f,
+                stiffness = 320f
+            )
+        )
+    }
+
+    // Scroll to new message smoothly so preceding bubbles glide up in complete sync with the new bubble
     LaunchedEffect(messages.size) {
+        if (messages.size > prevMessageCount.value && messages.isNotEmpty()) {
+            val lastIndex = (messages.size - 1).coerceAtLeast(0)
+            listState.animateScrollToItem(lastIndex)
+        }
+        prevMessageCount.value = messages.size
+    }
+
+    // Keep chat list in instant 1:1 sync with keyboard motion without delay
+    LaunchedEffect(isKeyboardOpen, imeBottomPx) {
         if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+            listState.scrollToItem((messages.size - 1).coerceAtLeast(0))
         }
     }
 
@@ -128,9 +179,9 @@ fun ChatScreen(
                 .statusBarsPadding()
                 .then(
                     if (showInternalComposer) {
-                        Modifier
-                            .navigationBarsPadding()
-                            .imePadding()
+                        val density = androidx.compose.ui.platform.LocalDensity.current
+                        val isKeyboardOpen = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(density) > 0
+                        if (!isKeyboardOpen) Modifier.navigationBarsPadding() else Modifier
                     } else {
                         Modifier
                     }
@@ -204,20 +255,109 @@ fun ChatScreen(
                 }
             }
 
-            // Messages List
+            // Error Banner (surfaces send errors without interrupting layout)
+            if (chatError != null) {
+                Surface(
+                    color = com.example.ui.theme.SentimentNegative.copy(alpha = 0.12f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, com.example.ui.theme.SentimentNegative.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .clickable { viewModel.clearChatError() }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = chatError ?: "Failed to send message",
+                            fontSize = 12.sp,
+                            color = com.example.ui.theme.SentimentNegative,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Dismiss",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = com.example.ui.theme.SentimentNegative
+                        )
+                    }
+                }
+            }
+
+            // Track animated message IDs and initial load status per client
+            val animatedMessageIds = remember(clientId) { mutableStateListOf<String>() }
+            val isInitialLoadDone = remember(clientId) { mutableStateOf(false) }
+
+            // Mark all initial messages as already animated when opening chat so existing messages NEVER bounce and list opens at bottom
+            LaunchedEffect(clientId, messages) {
+                if (messages.isNotEmpty()) {
+                    if (!isInitialLoadDone.value) {
+                        messages.forEach { msg ->
+                            if (!animatedMessageIds.contains(msg.id)) {
+                                animatedMessageIds.add(msg.id)
+                            }
+                        }
+                        listState.scrollToItem((messages.size - 1).coerceAtLeast(0))
+                        isInitialLoadDone.value = true
+                    }
+                }
+            }
+
+            LaunchedEffect(clientId) {
+                kotlinx.coroutines.delay(80)
+                if (messages.isNotEmpty()) {
+                    listState.scrollToItem((messages.size - 1).coerceAtLeast(0))
+                }
+                isInitialLoadDone.value = true
+            }
+
+            val openProgress = chatOpenAnim.value
+            val listOffsetY = ((-28f) * (1f - openProgress)).dp
+            val listAlpha = (0.2f + 0.8f * openProgress).coerceIn(0f, 1f)
+            val dynamicBottomPadding = (bottomContentPadding + 4.dp).coerceAtLeast(8.dp)
+
+            // Messages List - anchored above navigation bar (Alignment.Bottom) with slide-down entry
             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(bottom = bottomContentPadding + 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(horizontal = 16.dp)
+                    .graphicsLayer {
+                        translationY = listOffsetY.toPx()
+                        this.alpha = listAlpha
+                    },
+                contentPadding = PaddingValues(bottom = dynamicBottomPadding),
+                verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom)
             ) {
-                items(messages, key = { it.id }) { msg ->
-                    MessageBubbleRow(
+                itemsIndexed(messages, key = { _, msg -> msg.id }) { index, msg ->
+                    val isPrevSameSender = index > 0 && messages[index - 1].isOutgoing == msg.isOutgoing
+                    val isNextSameSender = index < messages.size - 1 && messages[index + 1].isOutgoing == msg.isOutgoing
+                    val isAlreadyAnimated = animatedMessageIds.contains(msg.id)
+
+                    AnimatedMessageBubble(
                         msg = msg,
-                        onMarkInvoicePaid = { invoiceId -> viewModel.markInvoicePaid(invoiceId) }
+                        isPrevSameSender = isPrevSameSender,
+                        isNextSameSender = isNextSameSender,
+                        isAlreadyAnimated = isAlreadyAnimated,
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = null,
+                            fadeOutSpec = null,
+                            placementSpec = spring(
+                                dampingRatio = 0.68f,
+                                stiffness = 240f
+                            )
+                        ),
+                        onAnimationComplete = { id ->
+                            if (!animatedMessageIds.contains(id)) {
+                                animatedMessageIds.add(id)
+                            }
+                        },
+                        onMarkInvoicePaid = { invoiceId -> viewModel.markInvoicePaid(invoiceId) },
+                        onToggleTask = { projId, taskId -> viewModel.toggleTask(projId, taskId) }
                     )
                 }
             }
@@ -248,8 +388,14 @@ fun ChatScreen(
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                         keyboardActions = KeyboardActions(
                             onSend = {
-                                viewModel.sendMessage(client.id, composerText)
-                                composerText = ""
+                                val textToSend = composerText.trim()
+                                if (textToSend.isNotBlank() && !isSending) {
+                                    viewModel.sendMessage(client.id, textToSend) { success ->
+                                        if (success) {
+                                            composerText = ""
+                                        }
+                                    }
+                                }
                             }
                         ),
                         shape = RoundedCornerShape(9999.dp),
@@ -268,20 +414,42 @@ fun ChatScreen(
 
                     Spacer(modifier = Modifier.width(10.dp))
 
+                    val internalSendInteractionSource = remember { MutableInteractionSource() }
+                    val isInternalPressed by internalSendInteractionSource.collectIsPressedAsState()
+
+                    val internalBtnScale by animateFloatAsState(
+                        targetValue = if (isInternalPressed) 0.88f else 1.0f,
+                        animationSpec = spring(
+                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                            stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                        ),
+                        label = "internal_send_btn_scale"
+                    )
+
                     Box(
                         modifier = Modifier
                             .size(46.dp)
+                            .scale(internalBtnScale)
                             .clip(CircleShape)
                             .background(WiseLime)
-                            .clickable {
-                                viewModel.sendMessage(client.id, composerText)
-                                composerText = ""
+                            .clickable(
+                                interactionSource = internalSendInteractionSource,
+                                indication = null
+                            ) {
+                                val textToSend = composerText.trim()
+                                if (textToSend.isNotBlank() && !isSending) {
+                                    viewModel.sendMessage(client.id, textToSend) { success ->
+                                        if (success) {
+                                            composerText = ""
+                                        }
+                                    }
+                                }
                             }
                             .testTag("chat_send_button_internal"),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            imageVector = Icons.Default.ArrowUpward,
                             contentDescription = "Send",
                             tint = DarkGreen,
                             modifier = Modifier.size(20.dp)
@@ -296,28 +464,150 @@ fun ChatScreen(
 }
 
 @Composable
+fun AnimatedMessageBubble(
+    msg: Message,
+    isPrevSameSender: Boolean = false,
+    isNextSameSender: Boolean = false,
+    isAlreadyAnimated: Boolean,
+    onAnimationComplete: (String) -> Unit,
+    onMarkInvoicePaid: (String) -> Unit,
+    onToggleTask: (String, String) -> Unit = { _, _ -> },
+    modifier: Modifier = Modifier
+) {
+    val animProgress = remember(msg.id) { Animatable(if (isAlreadyAnimated) 1f else 0f) }
+
+    LaunchedEffect(msg.id, isAlreadyAnimated) {
+        if (isAlreadyAnimated) {
+            animProgress.snapTo(1f)
+        } else {
+            animProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = spring(
+                    dampingRatio = if (msg.isOutgoing) 0.62f else 0.75f,
+                    stiffness = if (msg.isOutgoing) 240f else 260f
+                )
+            )
+            onAnimationComplete(msg.id)
+        }
+    }
+
+    val progress = animProgress.value
+
+    // Smooth fluid scale and translation directly on GPU render layer (0% layout re-measurement jitter)
+    val scaleX = if (msg.isOutgoing) {
+        0.28f + 0.72f * progress
+    } else {
+        0.40f + 0.60f * progress
+    }
+
+    val scaleY = if (msg.isOutgoing) {
+        if (progress < 0.55f) {
+            0.22f + 1.15f * progress
+        } else {
+            1.15f - 0.15f * ((progress - 0.55f) / 0.45f)
+        }
+    } else {
+        0.40f + 0.60f * progress
+    }
+
+    val alpha = (progress * 2.2f).coerceIn(0f, 1f)
+
+    val offsetY = if (msg.isOutgoing) {
+        (16f * (1f - progress)).dp
+    } else {
+        (12f * (1f - progress)).dp
+    }
+
+    val offsetX = if (msg.isOutgoing) {
+        (8f * (1f - progress)).dp
+    } else {
+        (-8f * (1f - progress)).dp
+    }
+
+    val transformOrigin = if (msg.isOutgoing) {
+        TransformOrigin(0.98f, 0.98f)
+    } else {
+        TransformOrigin(0.02f, 0.98f)
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                this.scaleX = scaleX
+                this.scaleY = scaleY
+                translationX = offsetX.toPx()
+                translationY = offsetY.toPx()
+                this.alpha = alpha
+                this.transformOrigin = transformOrigin
+            }
+    ) {
+        MessageBubbleRow(
+            msg = msg,
+            isPrevSameSender = isPrevSameSender,
+            isNextSameSender = isNextSameSender,
+            animProgress = progress,
+            onMarkInvoicePaid = onMarkInvoicePaid,
+            onToggleTask = onToggleTask
+        )
+    }
+}
+
+@Composable
 fun MessageBubbleRow(
     msg: Message,
-    onMarkInvoicePaid: (String) -> Unit = {}
+    isPrevSameSender: Boolean = false,
+    isNextSameSender: Boolean = false,
+    animProgress: Float = 1f,
+    onMarkInvoicePaid: (String) -> Unit = {},
+    onToggleTask: (String, String) -> Unit = { _, _ -> }
 ) {
     val colors = GlobalChatTheme.colors
 
     val alignment = if (msg.isOutgoing) Alignment.End else Alignment.Start
 
+    // Dynamic morphing corners when multiple messages from the same sender are stacked:
+    // Top messages in group morph their tail corner into smooth 18.dp capsule so only bottom message has the tail
+    val targetBottomStart = if (!msg.isOutgoing && isNextSameSender) 18.dp else if (!msg.isOutgoing) 4.dp else 18.dp
+    val targetBottomEnd = if (msg.isOutgoing && isNextSameSender) 18.dp else if (msg.isOutgoing) 4.dp else 18.dp
+
+    val animBottomStart by animateDpAsState(
+        targetValue = targetBottomStart,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f),
+        label = "bottomStartCorner"
+    )
+
+    val animBottomEnd by animateDpAsState(
+        targetValue = targetBottomEnd,
+        animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f),
+        label = "bottomEndCorner"
+    )
+
+    val isInvoiceMessage = msg.type == "invoice_share" || msg.invoiceCard != null || !msg.invoiceId.isNullOrBlank()
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = alignment
     ) {
-        if (msg.invoiceCard != null) {
-            LargeInvoiceCardBubble(
-                invoice = msg.invoiceCard,
-                isOutgoing = msg.isOutgoing,
-                onMarkPaid = { onMarkInvoicePaid(msg.invoiceCard.id) }
+        if (isInvoiceMessage) {
+            val displayInvoice = msg.invoiceCard ?: Invoice(
+                id = msg.invoiceId ?: msg.id,
+                title = msg.text.removePrefix("Invoice: ").substringBefore(" (").ifBlank { "Invoice" },
+                amount = 0.0,
+                status = "UNPAID",
+                isPaid = false
             )
-        }
-
-        if (msg.projectCard != null) {
-            MinimalProjectCardBubble(project = msg.projectCard, isOutgoing = msg.isOutgoing)
+            LargeInvoiceCardBubble(
+                invoice = displayInvoice,
+                isOutgoing = msg.isOutgoing,
+                onMarkPaid = { onMarkInvoicePaid(displayInvoice.id) }
+            )
+        } else if (msg.projectCard != null) {
+            MinimalProjectCardBubble(
+                project = msg.projectCard,
+                isOutgoing = msg.isOutgoing,
+                onToggleTask = onToggleTask
+            )
         }
 
         if (msg.meetingCard != null) {
@@ -331,21 +621,41 @@ fun MessageBubbleRow(
         if (msg.text.isNotEmpty()) {
             val bubbleColor = if (msg.isOutgoing) colors.brandLime else colors.cardBackground
             val textColor = if (msg.isOutgoing) DarkGreen else colors.textPrimary
-            val borderModifier = if (!msg.isOutgoing) {
-                Modifier.border(1.dp, colors.cardBorder, RoundedCornerShape(18.dp))
-            } else Modifier
+
+            val topStartCorner = if (msg.isOutgoing) {
+                (23f * (1f - animProgress) + 18f * animProgress).dp
+            } else 18.dp
+
+            val topEndCorner = if (msg.isOutgoing) {
+                (23f * (1f - animProgress) + 18f * animProgress).dp
+            } else 18.dp
+
+            val bottomStartCorner = if (msg.isOutgoing) {
+                (23f * (1f - animProgress) + 18f * animProgress).dp
+            } else {
+                (22f * (1f - animProgress) + animBottomStart.value * animProgress).dp
+            }
+
+            val bottomEndCorner = if (msg.isOutgoing) {
+                (23f * (1f - animProgress) + animBottomEnd.value * animProgress).dp
+            } else 18.dp
+
+            val bubbleShape = RoundedCornerShape(
+                topStart = topStartCorner,
+                topEnd = topEndCorner,
+                bottomStart = bottomStartCorner,
+                bottomEnd = bottomEndCorner
+            )
+
+            val border = if (!msg.isOutgoing) {
+                androidx.compose.foundation.BorderStroke(1.dp, colors.cardBorder)
+            } else null
 
             Surface(
-                shape = RoundedCornerShape(
-                    topStart = 18.dp,
-                    topEnd = 18.dp,
-                    bottomStart = if (msg.isOutgoing) 18.dp else 4.dp,
-                    bottomEnd = if (msg.isOutgoing) 4.dp else 18.dp
-                ),
+                shape = bubbleShape,
                 color = bubbleColor,
-                modifier = Modifier
-                    .widthIn(max = 280.dp)
-                    .then(borderModifier)
+                border = border,
+                modifier = Modifier.widthIn(max = 280.dp)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     Text(
@@ -358,34 +668,14 @@ fun MessageBubbleRow(
                 }
             }
         }
-
-        // Timestamp
-        Row(
-            modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = msg.timestamp,
-                fontSize = 11.sp,
-                color = colors.textSecondary
-            )
-            if (msg.isOutgoing) {
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Read",
-                    tint = WiseLime,
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-        }
     }
 }
 
 @Composable
 fun MinimalProjectCardBubble(
     project: Project,
-    isOutgoing: Boolean
+    isOutgoing: Boolean,
+    onToggleTask: (String, String) -> Unit = { _, _ -> }
 ) {
     val colors = GlobalChatTheme.colors
     val cardBg = if (colors.isDark) Color(project.cardColorHexDark) else Color(project.cardColorHexLight)
@@ -447,6 +737,56 @@ fun MinimalProjectCardBubble(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+
+            // Tasks Checklist inside Chat Card
+            if (project.tasks.isNotEmpty()) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    project.tasks.forEach { task ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onToggleTask(project.id, task.id) }
+                                .padding(vertical = 2.dp, horizontal = 2.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(if (task.isCompleted) WiseLime else Color.Transparent)
+                                    .border(
+                                        width = 1.5.dp,
+                                        color = if (task.isCompleted) WiseLime else colors.textSecondary.copy(alpha = 0.5f),
+                                        shape = RoundedCornerShape(5.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (task.isCompleted) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Done",
+                                        tint = DarkGreen,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = task.title,
+                                fontSize = 12.sp,
+                                fontWeight = if (task.isCompleted) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (task.isCompleted) colors.textPrimary else colors.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -612,7 +952,7 @@ fun MeetingInfoCardBubble(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "${meeting.time} · ${meeting.duration}",
+                        text = "${meeting.getDisplayTime()} · ${meeting.duration}",
                         fontSize = 12.sp,
                         color = colors.textSecondary,
                         maxLines = 1,
@@ -686,7 +1026,7 @@ fun LargeInvoiceCardBubble(
         if (colors.isDark) Color(0xFF2E322A) else Color(0xFFE2E6DC)
     }
 
-    val formattedAmount = String.format(Locale.US, "$%,.2f", invoice.amount)
+    val formattedAmount = invoice.formatAmount()
 
     Surface(
         shape = RoundedCornerShape(22.dp),

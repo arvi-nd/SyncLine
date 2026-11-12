@@ -48,6 +48,72 @@
         "createdAt": { "type": "timestamp", "description": "Creation timestamp" },
         "updatedAt": { "type": "timestamp", "description": "Update timestamp" }
       }
+    },
+    "Conversation": {
+      "path": "conversations/{conversationId}",
+      "type": "document",
+      "fields": {
+        "id": { "type": "string", "description": "Deterministic conversation ID (${minUid}_${maxUid})" },
+        "participantUids": { "type": "array", "description": "Sorted list of participant UIDs" },
+        "lastMessage": { "type": "string", "description": "Last message text preview" },
+        "lastMessageAt": { "type": "timestamp", "description": "Timestamp of last message" },
+        "lastMessageSenderUid": { "type": "string", "description": "UID of last message sender" },
+        "createdAt": { "type": "timestamp", "description": "Conversation creation timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Last update timestamp" }
+      }
+    },
+    "ChatMessage": {
+      "path": "conversations/{conversationId}/messages/{messageId}",
+      "type": "document",
+      "fields": {
+        "id": { "type": "string", "description": "Message ID" },
+        "conversationId": { "type": "string", "description": "Conversation ID" },
+        "senderUid": { "type": "string", "description": "UID of sender" },
+        "senderName": { "type": "string", "description": "Display name of sender" },
+        "text": { "type": "string", "description": "Message content text" },
+        "participantUids": { "type": "array", "description": "Participant UIDs for direct security rule authorization" },
+        "createdAt": { "type": "timestamp", "description": "Creation timestamp" }
+      }
+    },
+    "Project": {
+      "path": "projects/{projectId}",
+      "type": "document",
+      "fields": {
+        "id": { "type": "string", "description": "Project ID" },
+        "ownerUid": { "type": "string", "description": "UID of creator/freelancer" },
+        "clientUid": { "type": "string", "description": "UID of client/recipient" },
+        "participantUids": { "type": "array", "description": "Owner and client UIDs" },
+        "title": { "type": "string", "description": "Project title" },
+        "clientName": { "type": "string", "description": "Client name" },
+        "description": { "type": "string", "description": "Project description" },
+        "dueDate": { "type": "string", "description": "Due date" },
+        "startDate": { "type": "string", "description": "Start date" },
+        "progress": { "type": "number", "description": "Completion percentage 0-100" },
+        "status": { "type": "string", "description": "Project status (IN_PROGRESS, PLANNING, COMPLETED)" },
+        "createdAt": { "type": "timestamp", "description": "Creation timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Last update timestamp" }
+      }
+    },
+    "Meeting": {
+      "path": "meetings/{meetingId}",
+      "type": "document",
+      "fields": {
+        "id": { "type": "string", "description": "Meeting ID" },
+        "organizerUid": { "type": "string", "description": "UID of organizer/freelancer" },
+        "participantUids": { "type": "array", "description": "Organizer and participant client UIDs" },
+        "title": { "type": "string", "description": "Meeting title" },
+        "clientName": { "type": "string", "description": "Client name" },
+        "description": { "type": "string", "description": "Optional notes/agenda" },
+        "dateString": { "type": "string", "description": "Formatted date" },
+        "time": { "type": "string", "description": "Formatted time" },
+        "duration": { "type": "string", "description": "Duration label" },
+        "durationMinutes": { "type": "number", "description": "Duration in minutes" },
+        "scheduledAt": { "type": "timestamp", "description": "Scheduled start timestamp" },
+        "status": { "type": "string", "description": "Confirmed or Pending" },
+        "isOnline": { "type": "boolean", "description": "Whether meeting is online" },
+        "createdAt": { "type": "timestamp", "description": "Creation timestamp" },
+        "updatedAt": { "type": "timestamp", "description": "Last update timestamp" }
+      }
     }
   }
 }

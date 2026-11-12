@@ -42,11 +42,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import com.example.model.formatAmount
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -66,6 +73,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -76,6 +84,20 @@ import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
@@ -135,6 +157,9 @@ import com.example.ui.theme.DarkGreen
 import com.example.ui.theme.GlobalChatTheme
 import com.example.ui.theme.NearBlack
 import com.example.ui.theme.WiseLime
+import com.example.model.getDisplayMonth
+import com.example.model.getDisplayDay
+import com.example.model.getDisplayTime
 
 enum class BottomNavDestination(val label: String) {
     HOME("Home"),
@@ -156,7 +181,13 @@ fun BottomNavBar(
     onSendMessage: () -> Unit = {},
     onActionPillClick: (String) -> Unit = {},
     onConfirmAddClient: (username: String, onError: (String) -> Unit, onSuccess: (clientUid: String) -> Unit) -> Unit = { _, _, _ -> },
-    clientName: String = "Sarah Jenkins"
+    clientName: String = "Sarah Jenkins",
+    clientUid: String = "",
+    projectsList: List<ProjectItemData> = emptyList(),
+    meetingsList: List<com.example.model.Meeting> = emptyList(),
+    invoicesList: List<com.example.model.Invoice> = emptyList(),
+    onScheduleMeetingDirect: (title: String, date: String, time: String, duration: String, durationMinutes: Int, notes: String, scheduledAtMillis: Long?, meetingId: String, onSuccess: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+    onCreateInvoiceDirect: (title: String, clientUid: String, clientName: String, projectId: String?, projectName: String?, amount: Double, currencyCode: String, dueDate: String, notes: String?, attemptId: String, onSuccess: () -> Unit, onError: (String) -> Unit) -> Unit = { _, _, _, _, _, _, _, _, _, _, _, _ -> }
 ) {
     val colors = GlobalChatTheme.colors
 
@@ -297,12 +328,13 @@ fun BottomNavBar(
         label = "nav_row_alpha"
     )
 
+    val insets = WindowInsets.ime.union(WindowInsets.navigationBars)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .imePadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .windowInsetsPadding(insets)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
         val cardShape = remember { RoundedCornerShape(28.dp) }
@@ -567,19 +599,25 @@ fun BottomNavBar(
                                                 clientName = clientName,
                                                 onClose = { expandedPillMode = null },
                                                 onAddProject = { expandedPillMode = "create_project" },
-                                                onProjectSelect = { projectTitle ->
+                                                onProjectSelect = { projectPayload ->
                                                     expandedPillMode = null
-                                                    onActionPillClick("project_selected:$projectTitle")
-                                                }
+                                                    if (projectPayload.startsWith("p") || projectPayload.startsWith("proj")) {
+                                                        onActionPillClick("open_project:$projectPayload")
+                                                    } else {
+                                                        onActionPillClick("project_selected:$projectPayload")
+                                                    }
+                                                },
+                                                projects = projectsList
                                             )
                                         }
                                         "create_project" -> {
                                             CreateProjectMorphSheet(
                                                 clientName = clientName,
                                                 onCancel = { expandedPillMode = "project" },
-                                                onCreateProject = { projectName, hexLight, hexDark ->
+                                                onCreateProject = { projName, dueDate, hexLight, hexDark, tasks ->
                                                     expandedPillMode = null
-                                                    onActionPillClick("project_created:$projectName:$hexLight:$hexDark")
+                                                    val tasksStr = tasks.joinToString("|||")
+                                                    onActionPillClick("project_created:$projName:::$dueDate:::$hexLight:::$hexDark:::$tasksStr")
                                                 }
                                             )
                                         }
@@ -644,40 +682,55 @@ fun BottomNavBar(
                                             NewMeetingMorphSheet(
                                                 clientName = clientName,
                                                 onCancel = { expandedPillMode = "schedule" },
-                                                onSchedule = { title, date, time, duration, notes ->
-                                                    expandedPillMode = null
-                                                    onActionPillClick("meeting_scheduled:$title:$date:$time:$duration:$notes")
+                                                onSchedule = { title, date, time, duration, durationMinutes, notes, scheduledAtMillis, attemptMeetingId, onSuccess, onError ->
+                                                    onScheduleMeetingDirect(
+                                                        title, date, time, duration, durationMinutes, notes, scheduledAtMillis, attemptMeetingId,
+                                                        {
+                                                            expandedPillMode = null
+                                                            onSuccess()
+                                                        },
+                                                        onError
+                                                    )
                                                 }
                                             )
                                         }
                                         "scheduled_meetings" -> {
                                             ScheduledMeetingsMorphSheet(
                                                 clientName = clientName,
+                                                meetings = meetingsList,
                                                 onClose = { expandedPillMode = null },
-                                                onMeetingSelect = { mTitle, mDate, mTime, mDuration, mStatus ->
-                                                    expandedPillMode = null
-                                                    onActionPillClick("meeting_scheduled:$mTitle:$mDate:$mTime:$mDuration")
+                                                onScheduleNewMeeting = {
+                                                    expandedPillMode = "new_meeting"
                                                 }
                                             )
                                         }
                                         "invoice" -> {
                                             CreateInvoiceMorphSheet(
                                                 clientName = clientName,
+                                                clientUid = clientUid,
+                                                projectsList = projectsList,
                                                 onClose = { expandedPillMode = null },
                                                 onViewPastInvoices = { expandedPillMode = "past_invoices" },
-                                                onCreateInvoice = { title, project, amount, dueDate, notes ->
-                                                    expandedPillMode = null
-                                                    onActionPillClick("invoice_created:$title:::$project:::$amount:::$dueDate:::$notes")
+                                                onCreateInvoiceDirect = { title, cUid, cName, pId, pName, amt, currCode, dDate, nts, attemptId, onSuccess, onError ->
+                                                    onCreateInvoiceDirect(
+                                                        title, cUid, cName, pId, pName, amt, currCode, dDate, nts, attemptId,
+                                                        {
+                                                            expandedPillMode = null
+                                                            onSuccess()
+                                                        },
+                                                        onError
+                                                    )
                                                 }
                                             )
                                         }
                                         "past_invoices" -> {
                                             PastInvoicesMorphSheet(
                                                 clientName = clientName,
+                                                invoices = invoicesList,
                                                 onClose = { expandedPillMode = null },
                                                 onInvoiceSelect = { inv ->
                                                     expandedPillMode = null
-                                                    onActionPillClick("invoice_created:${inv.title}:::${inv.project}:::${inv.amount}:::${inv.dueDate}:::${inv.notes}")
+                                                    onActionPillClick("invoice_created:${inv.title}:::${inv.projectName ?: ""}:::${inv.amount}:::${inv.currencyCode}:::${inv.dueDate}:::${inv.notes ?: ""}:::${inv.id}")
                                                 }
                                             )
                                         }
@@ -915,16 +968,20 @@ fun BottomNavBar(
 
                             val sendInteractionSource = remember { MutableInteractionSource() }
                             val isPressed by sendInteractionSource.collectIsPressedAsState()
-                            val scale by animateFloatAsState(
-                                targetValue = if (isPressed) 0.92f else 1.0f,
-                                animationSpec = spring(stiffness = 500f),
+
+                            val sendBtnScale by animateFloatAsState(
+                                targetValue = if (isPressed) 0.88f else 1.0f,
+                                animationSpec = spring(
+                                    dampingRatio = androidx.compose.animation.core.Spring.DampingRatioMediumBouncy,
+                                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                                ),
                                 label = "send_btn_scale"
                             )
 
                             Box(
                                 modifier = Modifier
                                     .size(46.dp)
-                                    .scale(scale)
+                                    .scale(sendBtnScale)
                                     .clip(CircleShape)
                                     .background(WiseLime)
                                     .border(
@@ -942,7 +999,7 @@ fun BottomNavBar(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.Send,
+                                    imageVector = Icons.Default.ArrowUpward,
                                     contentDescription = "Send",
                                     tint = DarkGreen,
                                     modifier = Modifier.size(19.dp)
@@ -1348,8 +1405,10 @@ fun ChatActionPill(
 }
 
 data class ProjectItemData(
+    val id: String = "",
     val title: String,
     val subtitle: String,
+    val clientUid: String = "",
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
     val iconBgColorLight: Color,
     val iconBgColorDark: Color,
@@ -1363,42 +1422,11 @@ fun ProjectsMorphSheet(
     onClose: () -> Unit,
     onAddProject: () -> Unit = {},
     onProjectSelect: (String) -> Unit = {},
+    projects: List<ProjectItemData> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
     var dragAmountY by remember { mutableFloatStateOf(0f) }
-
-    val sampleProjects = remember {
-        listOf(
-            ProjectItemData(
-                title = "Brand Film Edit",
-                subtitle = "Due Oct 30 · 65% complete",
-                icon = Icons.Outlined.Movie,
-                iconBgColorLight = Color(0xFFE2F6D5),
-                iconBgColorDark = Color(0xFF2B3A23),
-                iconTintLight = DarkGreen,
-                iconTintDark = WiseLime
-            ),
-            ProjectItemData(
-                title = "Brand Identity",
-                subtitle = "Due Nov 4 · 40% complete",
-                icon = Icons.Outlined.Palette,
-                iconBgColorLight = Color(0xFFE1F0FA),
-                iconBgColorDark = Color(0xFF1E2F3C),
-                iconTintLight = Color(0xFF0F5A8A),
-                iconTintDark = Color(0xFF73C2F5)
-            ),
-            ProjectItemData(
-                title = "Social Media Reels",
-                subtitle = "Due Nov 8 · 20% complete",
-                icon = Icons.Outlined.OndemandVideo,
-                iconBgColorLight = Color(0xFFFCEBD9),
-                iconBgColorDark = Color(0xFF3B2B1E),
-                iconTintLight = Color(0xFF8C4A0F),
-                iconTintDark = Color(0xFFF5B073)
-            )
-        )
-    }
 
     Column(
         modifier = modifier
@@ -1434,7 +1462,7 @@ fun ProjectsMorphSheet(
                 .background(if (colors.isDark) Color(0xFF3E443A) else Color(0xFFD2D6CC))
         )
 
-        // Header Row: Title, Subtitle, Count, and Lime Circular Close/Add Button
+        // Header Row: Title, Subtitle, Count, and Lime Circular Plus Button
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1463,7 +1491,7 @@ fun ProjectsMorphSheet(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Text(
-                    text = "ONGOING PROJECTS · ${sampleProjects.size}",
+                    text = "ONGOING PROJECTS · ${projects.size}",
                     fontSize = 10.5.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.1.sp,
@@ -1493,15 +1521,86 @@ fun ProjectsMorphSheet(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // 3 Project Cards
-        Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            sampleProjects.forEach { proj ->
-                ProjectCardItem(
-                    proj = proj,
-                    onClick = { onProjectSelect(proj.title) }
+        if (projects.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(CircleShape)
+                        .background(if (colors.isDark) Color(0xFF243A1B) else Color(0xFFE2F6D5)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.WorkOutline,
+                        contentDescription = null,
+                        tint = if (colors.isDark) WiseLime else DarkGreen,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "No Projects Yet",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
                 )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "Create your first project to organize tasks and deliverables for $clientName.",
+                    fontSize = 12.5.sp,
+                    color = colors.textSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Surface(
+                    onClick = onAddProject,
+                    shape = RoundedCornerShape(9999.dp),
+                    color = WiseLime,
+                    modifier = Modifier.testTag("no_projects_create_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = DarkGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Create Project",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = DarkGreen
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                projects.forEach { proj ->
+                    ProjectCardItem(
+                        proj = proj,
+                        onClick = { onProjectSelect(if (proj.id.isNotBlank()) proj.id else proj.title) }
+                    )
+                }
             }
         }
     }
@@ -1614,27 +1713,61 @@ val sampleProjectColorOptions = listOf(
     ProjectColorOption("graphite", "Onyx Tint", 0xFFE4E8ECL, 0xFF21272CL, Color(0xFF90A4AE))
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateProjectMorphSheet(
     clientName: String,
     onCancel: () -> Unit,
-    onCreateProject: (String, Long, Long) -> Unit,
+    onCreateProject: (String, String, Long, Long, List<String>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
     var dragAmountY by remember { mutableFloatStateOf(0f) }
+    var isCreating by remember { mutableStateOf(false) }
 
-    var projectName by remember { mutableStateOf("Brand Film Edit") }
-    var description by remember { mutableStateOf("What are you working on?") }
+    var projectName by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
     var deadline by remember { mutableStateOf("Choose date") }
-    var budget by remember { mutableStateOf("e.g. ₹25,000") }
+    var budget by remember { mutableStateOf("") }
     var selectedStatus by remember { mutableStateOf("In progress") }
     var selectedColorOption by remember { mutableStateOf(sampleProjectColorOptions.first()) }
-    var initialTaskText by remember { mutableStateOf("Review raw footage") }
-    var tasksList by remember { mutableStateOf(listOf("Review raw footage")) }
+    var initialTaskText by remember { mutableStateOf("") }
+    var tasksList by remember { mutableStateOf(emptyList<String>()) }
+    var showDatePicker by remember { mutableStateOf(false) }
 
     val inputBg = if (colors.isDark) Color(0xFF1C1F1A) else Color(0xFFF4F6F1)
     val inputBorder = if (colors.isDark) Color(0xFF2D3228) else Color(0xFFE2E6DD)
+
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedMillis = datePickerState.selectedDateMillis
+                        if (selectedMillis != null) {
+                            val instant = java.time.Instant.ofEpochMilli(selectedMillis)
+                            val formatted = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.US)
+                                .withZone(java.time.ZoneId.of("UTC"))
+                                .format(instant)
+                            deadline = formatted
+                        }
+                        showDatePicker = false
+                    }
+                ) {
+                    Text("OK", color = DarkGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -1747,6 +1880,13 @@ fun CreateProjectMorphSheet(
                             .padding(horizontal = 12.dp),
                         contentAlignment = Alignment.CenterStart
                     ) {
+                        if (projectName.isEmpty()) {
+                            Text(
+                                text = "Project name (e.g. Website Redesign)",
+                                fontSize = 13.sp,
+                                color = colors.textSecondary.copy(alpha = 0.5f)
+                            )
+                        }
                         BasicTextField(
                             value = projectName,
                             onValueChange = { projectName = it },
@@ -1785,6 +1925,13 @@ fun CreateProjectMorphSheet(
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                         contentAlignment = Alignment.TopStart
                     ) {
+                        if (description.isEmpty()) {
+                            Text(
+                                text = "What are you working on?",
+                                fontSize = 12.sp,
+                                color = colors.textSecondary.copy(alpha = 0.5f)
+                            )
+                        }
                         BasicTextField(
                             value = description,
                             onValueChange = { description = it },
@@ -1800,69 +1947,12 @@ fun CreateProjectMorphSheet(
                 }
             }
 
-            // 3. CLIENT
-            Column {
-                Text(
-                    text = "CLIENT",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                    color = colors.textSecondary.copy(alpha = 0.85f),
-                    modifier = Modifier.padding(start = 4.dp, bottom = 3.dp)
-                )
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = inputBg,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(26.dp)
-                                .clip(CircleShape)
-                                .background(if (colors.isDark) Color(0xFF2B3A23) else Color(0xFFE2F6D5)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "SJ",
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (colors.isDark) WiseLime else DarkGreen
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(10.dp))
-
-                        Text(
-                            text = clientName,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colors.textPrimary,
-                            modifier = Modifier.weight(1f)
-                        )
-
-                        Icon(
-                            imageVector = Icons.Outlined.KeyboardArrowDown,
-                            contentDescription = "Select Client",
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-
-            // 4. DEADLINE & BUDGET
+            // 3. DEADLINE & BUDGET
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Deadline
+                // Deadline (clickable to pick date)
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "DEADLINE",
@@ -1873,10 +1963,11 @@ fun CreateProjectMorphSheet(
                         modifier = Modifier.padding(start = 4.dp, bottom = 3.dp)
                     )
                     Surface(
+                        onClick = { showDatePicker = true },
                         shape = RoundedCornerShape(14.dp),
                         color = inputBg,
                         border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
-                        modifier = Modifier.fillMaxWidth().height(38.dp)
+                        modifier = Modifier.fillMaxWidth().height(38.dp).testTag("create_project_deadline_btn")
                     ) {
                         Row(
                             modifier = Modifier
@@ -1887,15 +1978,15 @@ fun CreateProjectMorphSheet(
                             Icon(
                                 imageVector = Icons.Outlined.CalendarToday,
                                 contentDescription = "Deadline",
-                                tint = colors.textSecondary,
+                                tint = if (deadline == "Choose date") colors.textSecondary.copy(alpha = 0.6f) else (if (colors.isDark) WiseLime else DarkGreen),
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = deadline,
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colors.textSecondary
+                                fontWeight = if (deadline == "Choose date") FontWeight.Normal else FontWeight.Bold,
+                                color = if (deadline == "Choose date") colors.textSecondary.copy(alpha = 0.6f) else colors.textPrimary
                             )
                         }
                     }
@@ -1923,6 +2014,13 @@ fun CreateProjectMorphSheet(
                                 .padding(horizontal = 10.dp),
                             contentAlignment = Alignment.CenterStart
                         ) {
+                            if (budget.isEmpty()) {
+                                Text(
+                                    text = "e.g. ₹25,000",
+                                    fontSize = 12.sp,
+                                    color = colors.textSecondary.copy(alpha = 0.5f)
+                                )
+                            }
                             BasicTextField(
                                 value = budget,
                                 onValueChange = { budget = it },
@@ -1940,7 +2038,7 @@ fun CreateProjectMorphSheet(
                 }
             }
 
-            // 5. INITIAL STATUS
+            // 4. INITIAL STATUS
             Column {
                 Text(
                     text = "INITIAL STATUS",
@@ -1983,7 +2081,7 @@ fun CreateProjectMorphSheet(
                 }
             }
 
-            // 6. INITIAL TASKS
+            // 5. TASKS
             Column {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
@@ -1991,7 +2089,7 @@ fun CreateProjectMorphSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "INITIAL TASKS",
+                        text = "TASKS",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.sp,
@@ -2019,52 +2117,124 @@ fun CreateProjectMorphSheet(
                             .padding(horizontal = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        BasicTextField(
-                            value = initialTaskText,
-                            onValueChange = { initialTaskText = it },
-                            singleLine = true,
-                            textStyle = TextStyle(
-                                fontSize = 12.5.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = colors.textPrimary
-                            ),
-                            cursorBrush = SolidColor(if (colors.isDark) WiseLime else NearBlack),
-                            modifier = Modifier.weight(1f)
-                        )
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (initialTaskText.isEmpty()) {
+                                Text(
+                                    text = "Add a task (e.g. Review raw footage)",
+                                    fontSize = 12.sp,
+                                    color = colors.textSecondary.copy(alpha = 0.5f)
+                                )
+                            }
+                            BasicTextField(
+                                value = initialTaskText,
+                                onValueChange = { initialTaskText = it },
+                                singleLine = true,
+                                textStyle = TextStyle(
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = colors.textPrimary
+                                ),
+                                cursorBrush = SolidColor(if (colors.isDark) WiseLime else NearBlack),
+                                modifier = Modifier.fillMaxWidth().testTag("create_project_task_input")
+                            )
+                        }
 
-                        if (initialTaskText.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(if (initialTaskText.isNotBlank()) Color(0xFFA8F96B) else (if (colors.isDark) Color(0xFF2E342A) else Color(0xFFE2E6DD)))
+                                .clickable {
+                                    if (initialTaskText.isNotBlank()) {
+                                        tasksList = tasksList + initialTaskText.trim()
+                                        initialTaskText = ""
+                                    }
+                                }
+                                .testTag("create_project_add_task_btn"),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Clear Task",
-                                tint = colors.textSecondary,
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .clickable { initialTaskText = "" }
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Add Task",
+                                tint = if (initialTaskText.isNotBlank()) DarkGreen else colors.textSecondary,
+                                modifier = Modifier.size(15.dp)
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                // Render added tasks with interactive rounded checkbox buttons
+                if (tasksList.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        tasksList.forEachIndexed { index, taskTitle ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = inputBg,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder.copy(alpha = 0.6f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val isChecked = remember { mutableStateOf(false) }
+                                    Box(
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(if (isChecked.value) Color(0xFFA8F96B) else Color.Transparent)
+                                            .border(
+                                                width = 1.5.dp,
+                                                color = if (isChecked.value) Color(0xFFA8F96B) else colors.textSecondary.copy(alpha = 0.5f),
+                                                shape = RoundedCornerShape(6.dp)
+                                            )
+                                            .clickable { isChecked.value = !isChecked.value },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isChecked.value) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Checked",
+                                                tint = DarkGreen,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                        }
+                                    }
 
-                // + Add another task
-                Text(
-                    text = "+ Add another task",
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (colors.isDark) WiseLime else DarkGreen,
-                    modifier = Modifier
-                        .clickable {
-                            if (initialTaskText.isNotBlank()) {
-                                tasksList = tasksList + initialTaskText
-                                initialTaskText = ""
+                                    Spacer(modifier = Modifier.width(8.dp))
+
+                                    Text(
+                                        text = taskTitle,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isChecked.value) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isChecked.value) colors.textPrimary else colors.textSecondary,
+                                        modifier = Modifier.weight(1f)
+                                    )
+
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove Task",
+                                        tint = colors.textSecondary,
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .clickable {
+                                                tasksList = tasksList.filterIndexed { i, _ -> i != index }
+                                            }
+                                    )
+                                }
                             }
                         }
-                        .padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
-                )
+                    }
+                }
             }
 
-            // 7. CARD COLOR
+            // 6. CARD COLOR
             Column {
                 Text(
                     text = "CARD COLOR",
@@ -2119,7 +2289,7 @@ fun CreateProjectMorphSheet(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // 8. BOTTOM ACTION BUTTONS
+        // 7. BOTTOM ACTION BUTTONS
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2153,14 +2323,20 @@ fun CreateProjectMorphSheet(
             // Create Project Button
             Surface(
                 onClick = {
-                    onCreateProject(
-                        projectName.ifBlank { "New Project" },
-                        selectedColorOption.hexLight,
-                        selectedColorOption.hexDark
-                    )
+                    if (!isCreating) {
+                        isCreating = true
+                        onCreateProject(
+                            projectName.ifBlank { "New Project" },
+                            if (deadline != "Choose date") deadline else "Nov 15",
+                            selectedColorOption.hexLight,
+                            selectedColorOption.hexDark,
+                            tasksList
+                        )
+                    }
                 },
+                enabled = !isCreating,
                 shape = RoundedCornerShape(9999.dp),
-                color = WiseLime,
+                color = if (isCreating) colors.textSecondary.copy(alpha = 0.3f) else WiseLime,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
                     if (colors.isDark) Color(0xFF8CD860) else Color(0xFF88D45A)
@@ -2172,10 +2348,10 @@ fun CreateProjectMorphSheet(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = "Create",
+                        text = if (isCreating) "Creating..." else "Create",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        color = DarkGreen
+                        color = if (isCreating) colors.textSecondary else DarkGreen
                     )
                 }
             }
@@ -3433,21 +3609,127 @@ fun ScheduleMorphSheet(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewMeetingMorphSheet(
     clientName: String = "Sarah Jenkins",
     onCancel: () -> Unit,
-    onSchedule: (title: String, date: String, time: String, duration: String, notes: String) -> Unit,
+    onSchedule: (
+        title: String,
+        date: String,
+        time: String,
+        duration: String,
+        durationMinutes: Int,
+        notes: String,
+        scheduledAtMillis: Long?,
+        meetingId: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
     var dragAmountY by remember { mutableFloatStateOf(0f) }
+    var attemptId by remember { mutableStateOf("m_${java.util.UUID.randomUUID()}") }
 
     var meetingTitle by remember { mutableStateOf("") }
-    var selectedDate by remember { mutableStateOf("Select date") }
-    var startTime by remember { mutableStateOf("10:00 AM") }
-    var selectedDuration by remember { mutableStateOf("30 min") }
+    var selectedDate by remember { mutableStateOf("") }
+    var selectedDateMillis by remember { mutableStateOf<Long?>(null) }
+    var showDatePicker by remember { mutableStateOf(false) }
+
+    var selectedHour by remember { mutableIntStateOf(10) }
+    var selectedMinute by remember { mutableIntStateOf(0) }
+    var showTimePicker by remember { mutableStateOf(false) }
+
+    val durationOptions = listOf(5, 10, 15, 30, 45, 60)
+    var selectedDurationMinutes by remember { mutableIntStateOf(30) }
+    var durationDropdownExpanded by remember { mutableStateOf(false) }
+
     var notes by remember { mutableStateOf("") }
+    var isSaving by remember { mutableStateOf(false) }
+    var validationError by remember { mutableStateOf<String?>(null) }
+
+    fun formatDisplayTime(hour: Int, minute: Int): String {
+        val amPm = if (hour < 12) "AM" else "PM"
+        val displayHour = when {
+            hour == 0 -> 12
+            hour > 12 -> hour - 12
+            else -> hour
+        }
+        val displayMinute = minute.toString().padStart(2, '0')
+        return "$displayHour:$displayMinute $amPm"
+    }
+
+    val startTimeFormatted = remember(selectedHour, selectedMinute) {
+        formatDisplayTime(selectedHour, selectedMinute)
+    }
+
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedMillis = datePickerState.selectedDateMillis
+                        if (selectedMillis != null) {
+                            val instant = java.time.Instant.ofEpochMilli(selectedMillis)
+                            val formatted = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.US)
+                                .withZone(java.time.ZoneId.of("UTC"))
+                                .format(instant)
+                            selectedDate = formatted
+                            selectedDateMillis = selectedMillis
+                            validationError = null
+                        }
+                        showDatePicker = false
+                    }
+                ) {
+                    Text("OK", color = DarkGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    if (showTimePicker) {
+        val timePickerState = rememberTimePickerState(
+            initialHour = selectedHour,
+            initialMinute = selectedMinute,
+            is24Hour = false
+        )
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        selectedHour = timePickerState.hour
+                        selectedMinute = timePickerState.minute
+                        showTimePicker = false
+                    }
+                ) {
+                    Text("OK", color = DarkGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimePicker = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            },
+            text = {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    TimePicker(state = timePickerState)
+                }
+            },
+            containerColor = colors.cardBackground,
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
 
     val iconBg = if (colors.isDark) Color(0xFF243A1B) else Color(0xFFEAF4E8)
     val iconTint = if (colors.isDark) WiseLime else Color(0xFF335832)
@@ -3489,7 +3771,7 @@ fun NewMeetingMorphSheet(
                 .background(if (colors.isDark) Color(0xFF3E443A) else Color(0xFFD2D6CC))
         )
 
-        // Header: "New meeting", "With Sarah Jenkins", Mint squircle badge
+        // Header: "New meeting", "With $clientName", Mint squircle badge
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -3580,7 +3862,10 @@ fun NewMeetingMorphSheet(
                     }
                     BasicTextField(
                         value = meetingTitle,
-                        onValueChange = { meetingTitle = it },
+                        onValueChange = {
+                            meetingTitle = it
+                            validationError = null
+                        },
                         singleLine = true,
                         textStyle = TextStyle(
                             fontSize = 13.sp,
@@ -3608,9 +3893,7 @@ fun NewMeetingMorphSheet(
                 modifier = Modifier.padding(bottom = 4.dp)
             )
             Surface(
-                onClick = {
-                    selectedDate = if (selectedDate == "Select date") "Tomorrow, Oct 27" else if (selectedDate == "Tomorrow, Oct 27") "Thursday, Oct 29" else "Select date"
-                },
+                onClick = { showDatePicker = true },
                 shape = RoundedCornerShape(16.dp),
                 color = inputBg,
                 border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
@@ -3633,10 +3916,10 @@ fun NewMeetingMorphSheet(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = selectedDate,
+                        text = if (selectedDate.isEmpty()) "Select date" else selectedDate,
                         fontSize = 13.sp,
-                        fontWeight = if (selectedDate == "Select date") FontWeight.Normal else FontWeight.Medium,
-                        color = if (selectedDate == "Select date") colors.textPrimary else (if (colors.isDark) WiseLime else DarkGreen),
+                        fontWeight = if (selectedDate.isEmpty()) FontWeight.Normal else FontWeight.Medium,
+                        color = if (selectedDate.isEmpty()) colors.textSecondary.copy(alpha = 0.7f) else (if (colors.isDark) WiseLime else DarkGreen),
                         modifier = Modifier.weight(1f)
                     )
                     Icon(
@@ -3666,14 +3949,7 @@ fun NewMeetingMorphSheet(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Surface(
-                    onClick = {
-                        startTime = when (startTime) {
-                            "10:00 AM" -> "11:30 AM"
-                            "11:30 AM" -> "2:00 PM"
-                            "2:00 PM" -> "3:30 PM"
-                            else -> "10:00 AM"
-                        }
-                    },
+                    onClick = { showTimePicker = true },
                     shape = RoundedCornerShape(16.dp),
                     color = inputBg,
                     border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
@@ -3696,7 +3972,7 @@ fun NewMeetingMorphSheet(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = startTime,
+                            text = startTimeFormatted,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
                             color = colors.textPrimary
@@ -3705,50 +3981,69 @@ fun NewMeetingMorphSheet(
                 }
             }
 
-            // Duration
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Duration",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colors.textSecondary,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                Surface(
-                    onClick = {
-                        selectedDuration = when (selectedDuration) {
-                            "30 min" -> "45 min"
-                            "45 min" -> "60 min"
-                            "60 min" -> "15 min"
-                            else -> "30 min"
-                        }
-                    },
-                    shape = RoundedCornerShape(16.dp),
-                    color = inputBg,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(42.dp)
-                        .testTag("meeting_duration_picker")
-                ) {
-                    Row(
+            // Duration Dropdown
+            Box(modifier = Modifier.weight(1f)) {
+                Column {
+                    Text(
+                        text = "Duration",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = colors.textSecondary,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Surface(
+                        onClick = { durationDropdownExpanded = true },
+                        shape = RoundedCornerShape(16.dp),
+                        color = inputBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .fillMaxWidth()
+                            .height(42.dp)
+                            .testTag("meeting_duration_picker")
                     ) {
-                        Text(
-                            text = selectedDuration,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colors.textPrimary
-                        )
-                        Icon(
-                            imageVector = Icons.Outlined.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(18.dp)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "$selectedDurationMinutes min",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colors.textPrimary
+                            )
+                            Icon(
+                                imageVector = Icons.Outlined.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = durationDropdownExpanded,
+                    onDismissRequest = { durationDropdownExpanded = false },
+                    modifier = Modifier.background(colors.cardBackground)
+                ) {
+                    durationOptions.forEach { minutes ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "$minutes min",
+                                    fontSize = 13.sp,
+                                    fontWeight = if (selectedDurationMinutes == minutes) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedDurationMinutes == minutes) (if (colors.isDark) WiseLime else DarkGreen) else colors.textPrimary
+                                )
+                            },
+                            onClick = {
+                                selectedDurationMinutes = minutes
+                                durationDropdownExpanded = false
+                            },
+                            modifier = Modifier.testTag("duration_option_$minutes")
                         )
                     }
                 }
@@ -3792,7 +4087,7 @@ fun NewMeetingMorphSheet(
                 ) {
                     if (notes.isEmpty()) {
                         Text(
-                            text = "Anything Sarah should know?",
+                            text = "Anything $clientName should know?",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Normal,
                             color = colors.textSecondary.copy(alpha = 0.65f)
@@ -3816,27 +4111,79 @@ fun NewMeetingMorphSheet(
             }
         }
 
+        // Validation / Submission Error Banner
+        if (validationError != null) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (colors.isDark) Color(0xFF3B1F21) else Color(0xFFFDE8E8),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = validationError ?: "",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (colors.isDark) Color(0xFFFF8B8B) else Color(0xFFD03238),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(14.dp))
 
         // 5. Schedule meeting button (Dark/Black Pill)
         val submitInteractionSource = remember { MutableInteractionSource() }
         val isSubmitPressed by submitInteractionSource.collectIsPressedAsState()
         val submitScale by animateFloatAsState(
-            targetValue = if (isSubmitPressed) 0.97f else 1.0f,
+            targetValue = if (isSubmitPressed && !isSaving) 0.97f else 1.0f,
             animationSpec = spring(stiffness = 500f),
             label = "submit_btn_scale"
         )
 
         Surface(
             onClick = {
+                if (isSaving) return@Surface
+                if (meetingTitle.trim().isBlank()) {
+                    validationError = "Please enter a meeting title."
+                    return@Surface
+                }
+                if (selectedDate.isBlank() || selectedDate == "Select date") {
+                    validationError = "Please select a date."
+                    return@Surface
+                }
+
+                validationError = null
+                isSaving = true
+
+                val finalMillis: Long? = if (selectedDateMillis != null) {
+                    val localDate = java.time.Instant.ofEpochMilli(selectedDateMillis!!)
+                        .atZone(java.time.ZoneId.of("UTC"))
+                        .toLocalDate()
+                    val localDateTime = localDate.atTime(selectedHour, selectedMinute)
+                    val zonedDateTime = localDateTime.atZone(java.time.ZoneId.systemDefault())
+                    zonedDateTime.toInstant().toEpochMilli()
+                } else null
+
                 onSchedule(
-                    meetingTitle.ifBlank { "Project review" },
-                    if (selectedDate == "Select date") "Tomorrow, 10:00 AM" else selectedDate,
-                    startTime,
-                    selectedDuration,
-                    notes
+                    meetingTitle.trim(),
+                    selectedDate,
+                    startTimeFormatted,
+                    "$selectedDurationMinutes min",
+                    selectedDurationMinutes,
+                    notes.trim(),
+                    finalMillis,
+                    attemptId,
+                    {
+                        isSaving = false
+                        attemptId = "m_${java.util.UUID.randomUUID()}"
+                    },
+                    { err ->
+                        isSaving = false
+                        validationError = err
+                    }
                 )
             },
+            enabled = !isSaving,
             shape = RoundedCornerShape(9999.dp),
             color = if (colors.isDark) Color(0xFF262923) else Color(0xFF1B1E19),
             modifier = Modifier
@@ -3846,12 +4193,31 @@ fun NewMeetingMorphSheet(
                 .testTag("submit_schedule_meeting_btn")
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = "Schedule meeting",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                if (isSaving) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = WiseLime,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Scheduling...",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Schedule meeting",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
             }
         }
 
@@ -3894,8 +4260,9 @@ data class ScheduledMeetingItemData(
 @Composable
 fun ScheduledMeetingsMorphSheet(
     clientName: String = "Sarah Jenkins",
+    meetings: List<com.example.model.Meeting> = emptyList(),
     onClose: () -> Unit,
-    onMeetingSelect: (title: String, date: String, time: String, duration: String, status: String) -> Unit,
+    onScheduleNewMeeting: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
@@ -3905,29 +4272,24 @@ fun ScheduledMeetingsMorphSheet(
     val iconBg = if (colors.isDark) Color(0xFF243A1B) else Color(0xFFEAF4E8)
     val iconTint = if (colors.isDark) WiseLime else Color(0xFF335832)
 
-    val upcomingMeetings = remember {
-        listOf(
-            ScheduledMeetingItemData(
-                id = "sm1",
-                month = "OCT",
-                day = "28",
-                title = "Project review",
-                time = "10:00 AM",
-                duration = "30 min",
-                status = "Confirmed",
-                isConfirmed = true
-            ),
-            ScheduledMeetingItemData(
-                id = "sm2",
-                month = "OCT",
-                day = "30",
-                title = "Feedback call",
-                time = "2:30 PM",
-                duration = "30 min",
-                status = "Awaiting response",
-                isConfirmed = false
-            )
-        )
+    val currentMillis = remember { System.currentTimeMillis() }
+    val filteredMeetings = remember(meetings, selectedTab) {
+        when (selectedTab) {
+            "Upcoming" -> meetings.filter { m ->
+                val meetingTime = m.scheduledAt?.toDate()?.time ?: Long.MAX_VALUE
+                (meetingTime >= currentMillis - 3600_000L || m.scheduledAt == null) &&
+                        m.status.equals("Confirmed", ignoreCase = true)
+            }
+            "Pending" -> meetings.filter { m ->
+                m.status.equals("Pending", ignoreCase = true) ||
+                        m.status.equals("Awaiting response", ignoreCase = true)
+            }
+            "Past" -> meetings.filter { m ->
+                val meetingTime = m.scheduledAt?.toDate()?.time ?: 0L
+                meetingTime < currentMillis - 3600_000L && m.scheduledAt != null
+            }
+            else -> meetings
+        }
     }
 
     Column(
@@ -3964,7 +4326,7 @@ fun ScheduledMeetingsMorphSheet(
                 .background(if (colors.isDark) Color(0xFF3E443A) else Color(0xFFD2D6CC))
         )
 
-        // Header: "Scheduled meetings", "With Sarah Jenkins", Mint badge
+        // Header: "Scheduled meetings", "With $clientName", Mint badge
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -4049,38 +4411,99 @@ fun ScheduledMeetingsMorphSheet(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Meeting Cards List
-        Column(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            upcomingMeetings.forEach { meeting ->
-                ScheduledMeetingCard(
-                    meeting = meeting,
-                    onClick = {
-                        onMeetingSelect(
-                            meeting.title,
-                            "${meeting.month} ${meeting.day}",
-                            meeting.time,
-                            meeting.duration,
-                            meeting.status
+        if (filteredMeetings.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(iconBg),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CalendarToday,
+                            contentDescription = null,
+                            tint = iconTint,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
-                )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "No $selectedTab meetings",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.textPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "No meetings scheduled with $clientName.",
+                        fontSize = 12.5.sp,
+                        color = colors.textSecondary,
+                        textAlign = TextAlign.Center
+                    )
+                    if (selectedTab == "Upcoming") {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Surface(
+                            onClick = onScheduleNewMeeting,
+                            shape = RoundedCornerShape(9999.dp),
+                            color = WiseLime,
+                            modifier = Modifier.height(38.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 18.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Schedule meeting",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = DarkGreen
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Meeting Cards List
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                filteredMeetings.forEach { meeting ->
+                    val monthStr = meeting.getDisplayMonth()
+                    val dayStr = meeting.getDisplayDay()
+                    val timeStr = meeting.getDisplayTime()
+
+                    val itemData = ScheduledMeetingItemData(
+                        id = meeting.id,
+                        month = monthStr,
+                        day = dayStr,
+                        title = meeting.title,
+                        time = timeStr,
+                        duration = meeting.duration,
+                        status = meeting.status,
+                        isConfirmed = meeting.status.equals("Confirmed", ignoreCase = true)
+                    )
+
+                    ScheduledMeetingCard(
+                        meeting = itemData,
+                        onClick = {}
+                    )
+                }
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-
-        // Footer Caption
-        Text(
-            text = "Example meetings for the prototype — not actual bookings.",
-            fontSize = 11.5.sp,
-            fontWeight = FontWeight.Normal,
-            color = colors.textSecondary.copy(alpha = 0.85f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
@@ -4208,12 +4631,28 @@ fun ScheduledMeetingCard(
     }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun CreateInvoiceMorphSheet(
     clientName: String = "Sarah Jenkins",
+    clientUid: String = "",
+    projectsList: List<ProjectItemData> = emptyList(),
     onClose: () -> Unit,
     onViewPastInvoices: () -> Unit,
-    onCreateInvoice: (title: String, project: String, amount: String, dueDate: String, notes: String) -> Unit,
+    onCreateInvoiceDirect: (
+        title: String,
+        clientUid: String,
+        clientName: String,
+        projectId: String?,
+        projectName: String?,
+        amount: Double,
+        currencyCode: String,
+        dueDate: String,
+        notes: String?,
+        attemptId: String,
+        onSuccess: () -> Unit,
+        onError: (String) -> Unit
+    ) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
@@ -4222,8 +4661,16 @@ fun CreateInvoiceMorphSheet(
     var invoiceTitle by remember { mutableStateOf("") }
     var selectedProject by remember { mutableStateOf("Select project (optional)") }
     var amount by remember { mutableStateOf("") }
+    var currencyCode by remember { mutableStateOf("INR") }
+    var currencyDropdownExpanded by remember { mutableStateOf(false) }
+    var projectDropdownExpanded by remember { mutableStateOf(false) }
     var dueDate by remember { mutableStateOf("Choose due date") }
+    var showDatePicker by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
+    var isSubmitting by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val attemptInvoiceId = remember { "inv_${java.util.UUID.randomUUID()}" }
 
     val iconBg = if (colors.isDark) Color(0xFF243A1B) else Color(0xFFEAF4E8)
     val iconTint = if (colors.isDark) WiseLime else Color(0xFF335832)
@@ -4231,8 +4678,41 @@ fun CreateInvoiceMorphSheet(
     val inputBg = if (colors.isDark) Color(0xFF1E211C) else Color(0xFFFFFFFF)
     val inputBorder = if (colors.isDark) Color(0xFF2E322A) else Color(0xFFE2E6DD)
 
-    val sampleProjectsList = listOf("Select project (optional)", "Mobile Redesign", "Website Redesign", "Brand Film Edit")
-    val sampleDueDates = listOf("Choose due date", "Oct 30, 2026", "Nov 15, 2026", "Dec 1, 2026")
+    // Filter projects associated with the active client
+    val availableProjects = remember(projectsList, clientUid) {
+        projectsList.filter { it.clientUid.isBlank() || it.clientUid == clientUid }
+    }
+
+    if (showDatePicker) {
+        val datePickerState = rememberDatePickerState()
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedMillis = datePickerState.selectedDateMillis
+                        if (selectedMillis != null) {
+                            val instant = java.time.Instant.ofEpochMilli(selectedMillis)
+                            val formatted = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.US)
+                                .withZone(java.time.ZoneId.of("UTC"))
+                                .format(instant)
+                            dueDate = formatted
+                        }
+                        showDatePicker = false
+                    }
+                ) {
+                    Text("OK", color = DarkGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -4323,6 +4803,23 @@ fun CreateInvoiceMorphSheet(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            if (errorMessage != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFFFEE2E2),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFCA5A5)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = errorMessage!!,
+                        color = Color(0xFF991B1B),
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
             // 1. Invoice title
             Column {
                 Text(
@@ -4356,7 +4853,7 @@ fun CreateInvoiceMorphSheet(
                         }
                         BasicTextField(
                             value = invoiceTitle,
-                            onValueChange = { invoiceTitle = it },
+                            onValueChange = { if (it.length <= 80) invoiceTitle = it },
                             singleLine = true,
                             textStyle = TextStyle(
                                 fontSize = 13.5.sp,
@@ -4372,7 +4869,7 @@ fun CreateInvoiceMorphSheet(
                 }
             }
 
-            // 2. Project
+            // 2. Project Selector
             Column {
                 Text(
                     text = "Project",
@@ -4381,94 +4878,244 @@ fun CreateInvoiceMorphSheet(
                     color = colors.textSecondary,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
-                Surface(
-                    onClick = {
-                        val currIdx = sampleProjectsList.indexOf(selectedProject)
-                        val nextIdx = if (currIdx == -1 || currIdx == sampleProjectsList.lastIndex) 1 else currIdx + 1
-                        selectedProject = sampleProjectsList[nextIdx]
-                    },
-                    shape = RoundedCornerShape(9999.dp),
-                    color = inputBg,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .testTag("invoice_project_picker")
-                ) {
-                    Row(
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Surface(
+                        onClick = { projectDropdownExpanded = true },
+                        shape = RoundedCornerShape(9999.dp),
+                        color = inputBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .testTag("invoice_project_picker")
                     ) {
-                        Text(
-                            text = selectedProject,
-                            fontSize = 13.5.sp,
-                            fontWeight = if (selectedProject == "Select project (optional)") FontWeight.Normal else FontWeight.Medium,
-                            color = if (selectedProject == "Select project (optional)") colors.textSecondary.copy(alpha = 0.65f) else colors.textPrimary
-                        )
-                        Icon(
-                            imageVector = Icons.Outlined.KeyboardArrowDown,
-                            contentDescription = "Select project",
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = selectedProject,
+                                fontSize = 13.5.sp,
+                                fontWeight = if (selectedProject == "Select project (optional)") FontWeight.Normal else FontWeight.Medium,
+                                color = if (selectedProject == "Select project (optional)") colors.textSecondary.copy(alpha = 0.65f) else colors.textPrimary
+                            )
+                            Icon(
+                                imageVector = Icons.Outlined.KeyboardArrowDown,
+                                contentDescription = "Select project",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Custom Rounded Dropdown Surface
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = inputBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
+                        shadowElevation = 6.dp
+                    ) {
+                        DropdownMenu(
+                            expanded = projectDropdownExpanded,
+                            onDismissRequest = { projectDropdownExpanded = false },
+                            modifier = Modifier
+                                .fillMaxWidth(0.88f)
+                                .background(inputBg)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Select project (optional)", fontSize = 13.sp, color = colors.textSecondary) },
+                                onClick = {
+                                    selectedProject = "Select project (optional)"
+                                    projectDropdownExpanded = false
+                                }
+                            )
+                            if (availableProjects.isEmpty()) {
+                                DropdownMenuItem(
+                                    enabled = false,
+                                    text = {
+                                        Text(
+                                            text = "No projects available",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = colors.textSecondary.copy(alpha = 0.5f)
+                                        )
+                                    },
+                                    onClick = {}
+                                )
+                            } else {
+                                availableProjects.forEach { proj ->
+                                    val isSelected = (proj.title == selectedProject)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text(
+                                                    text = proj.title,
+                                                    fontSize = 13.5.sp,
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                                    color = if (isSelected) (if (colors.isDark) WiseLime else DarkGreen) else colors.textPrimary
+                                                )
+                                                if (isSelected) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = if (colors.isDark) WiseLime else DarkGreen,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedProject = proj.title
+                                            projectDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // 3. Amount
+            // 3. Currency & Amount Row
             Column {
                 Text(
-                    text = "Amount",
+                    text = "Amount & Currency",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = colors.textSecondary,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
-                Surface(
-                    shape = RoundedCornerShape(9999.dp),
-                    color = inputBg,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
+                    // Custom Currency Dropdown Pill
+                    Box {
+                        Surface(
+                            onClick = { currencyDropdownExpanded = true },
+                            shape = RoundedCornerShape(9999.dp),
+                            color = inputBg,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
+                            modifier = Modifier.height(44.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .padding(horizontal = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = when (currencyCode) {
+                                        "INR" -> "₹ INR"
+                                        "GBP" -> "£ GBP"
+                                        else -> "$ USD"
+                                    },
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.textPrimary
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Outlined.KeyboardArrowDown,
+                                    contentDescription = "Select currency",
+                                    tint = colors.textSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = inputBg,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
+                            shadowElevation = 6.dp
+                        ) {
+                            DropdownMenu(
+                                expanded = currencyDropdownExpanded,
+                                onDismissRequest = { currencyDropdownExpanded = false },
+                                modifier = Modifier.background(inputBg)
+                            ) {
+                                listOf(
+                                    "INR" to "₹ INR (Indian Rupee)",
+                                    "USD" to "$ USD (US Dollar)",
+                                    "GBP" to "£ GBP (British Pound)"
+                                ).forEach { (code, label) ->
+                                    val isSelected = (currencyCode == code)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = label,
+                                                fontSize = 13.5.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                                color = if (isSelected) (if (colors.isDark) WiseLime else DarkGreen) else colors.textPrimary
+                                            )
+                                        },
+                                        onClick = {
+                                            currencyCode = code
+                                            currencyDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Numeric Amount Field
+                    Surface(
+                        shape = RoundedCornerShape(9999.dp),
+                        color = inputBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp),
-                        contentAlignment = Alignment.CenterStart
+                            .weight(1f)
+                            .height(44.dp)
                     ) {
-                        if (amount.isEmpty()) {
-                            Text(
-                                text = "0.00",
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = colors.textSecondary.copy(alpha = 0.65f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (amount.isEmpty()) {
+                                Text(
+                                    text = "0.00",
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = colors.textSecondary.copy(alpha = 0.65f)
+                                )
+                            }
+                            BasicTextField(
+                                value = amount,
+                                onValueChange = { input ->
+                                    if (input.all { it.isDigit() || it == '.' }) {
+                                        amount = input
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                textStyle = TextStyle(
+                                    fontSize = 13.5.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = colors.textPrimary
+                                ),
+                                cursorBrush = SolidColor(if (colors.isDark) WiseLime else NearBlack),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("invoice_amount_input")
                             )
                         }
-                        BasicTextField(
-                            value = amount,
-                            onValueChange = { amount = it },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            textStyle = TextStyle(
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colors.textPrimary
-                            ),
-                            cursorBrush = SolidColor(if (colors.isDark) WiseLime else NearBlack),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("invoice_amount_input")
-                        )
                     }
                 }
             }
 
-            // 4. Due date
+            // 4. Due Date
             Column {
                 Text(
                     text = "Due date",
@@ -4478,11 +5125,7 @@ fun CreateInvoiceMorphSheet(
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
                 Surface(
-                    onClick = {
-                        val currIdx = sampleDueDates.indexOf(dueDate)
-                        val nextIdx = if (currIdx == -1 || currIdx == sampleDueDates.lastIndex) 1 else currIdx + 1
-                        dueDate = sampleDueDates[nextIdx]
-                    },
+                    onClick = { showDatePicker = true },
                     shape = RoundedCornerShape(9999.dp),
                     color = inputBg,
                     border = androidx.compose.foundation.BorderStroke(1.dp, inputBorder),
@@ -4554,7 +5197,7 @@ fun CreateInvoiceMorphSheet(
                         }
                         BasicTextField(
                             value = notes,
-                            onValueChange = { notes = it },
+                            onValueChange = { if (it.length <= 300) notes = it },
                             textStyle = TextStyle(
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Normal,
@@ -4576,7 +5219,6 @@ fun CreateInvoiceMorphSheet(
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Create invoice button (Solid Dark Pill)
             val submitInteractionSource = remember { MutableInteractionSource() }
             val isSubmitPressed by submitInteractionSource.collectIsPressedAsState()
             val submitScale by animateFloatAsState(
@@ -4587,14 +5229,50 @@ fun CreateInvoiceMorphSheet(
 
             Surface(
                 onClick = {
-                    onCreateInvoice(
-                        invoiceTitle.ifBlank { "Video editing — October" },
-                        if (selectedProject == "Select project (optional)") "General Services" else selectedProject,
-                        amount.ifBlank { "450.00" },
-                        if (dueDate == "Choose due date") "Oct 30, 2026" else dueDate,
-                        notes
+                    if (isSubmitting) return@Surface
+                    val cleanTitle = invoiceTitle.trim()
+                    if (cleanTitle.isBlank()) {
+                        errorMessage = "Please enter an invoice title"
+                        return@Surface
+                    }
+                    val parsedAmt = amount.toDoubleOrNull()
+                    if (parsedAmt == null || parsedAmt <= 0) {
+                        errorMessage = "Please enter a valid amount"
+                        return@Surface
+                    }
+                    if (dueDate == "Choose due date" || dueDate.isBlank()) {
+                        errorMessage = "Please select a due date"
+                        return@Surface
+                    }
+
+                    errorMessage = null
+                    isSubmitting = true
+
+                    val selectedProjObj = availableProjects.find { it.title == selectedProject }
+                    val projId = selectedProjObj?.id
+                    val projName = selectedProjObj?.title
+
+                    onCreateInvoiceDirect(
+                        cleanTitle,
+                        clientUid,
+                        clientName,
+                        projId,
+                        projName,
+                        parsedAmt,
+                        currencyCode,
+                        dueDate,
+                        notes.trim(),
+                        attemptInvoiceId,
+                        {
+                            isSubmitting = false
+                        },
+                        { err ->
+                            isSubmitting = false
+                            errorMessage = err
+                        }
                     )
                 },
+                enabled = !isSubmitting,
                 shape = RoundedCornerShape(9999.dp),
                 color = if (colors.isDark) Color(0xFF262923) else Color(0xFF1B1E19),
                 modifier = Modifier
@@ -4604,12 +5282,20 @@ fun CreateInvoiceMorphSheet(
                     .testTag("submit_create_invoice_btn")
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "Create invoice",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
+                    if (isSubmitting) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "Create invoice",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
                 }
             }
 
@@ -4628,12 +5314,12 @@ fun CreateInvoiceMorphSheet(
                 color = Color.Transparent,
                 border = androidx.compose.foundation.BorderStroke(
                     1.dp,
-                    if (colors.isDark) Color(0xFF2E322A) else Color(0xFFDFE3DA)
+                    if (colors.isDark) Color(0xFF32362D) else Color(0xFFD2D6CC)
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .scale(pastScale)
-                    .height(46.dp)
+                    .height(44.dp)
                     .testTag("view_past_invoices_btn")
             ) {
                 Row(
@@ -4645,12 +5331,12 @@ fun CreateInvoiceMorphSheet(
                         imageVector = Icons.Outlined.History,
                         contentDescription = "Past invoices",
                         tint = colors.textPrimary,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "Past invoices",
-                        fontSize = 14.sp,
+                        fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = colors.textPrimary
                     )
@@ -4660,21 +5346,12 @@ fun CreateInvoiceMorphSheet(
     }
 }
 
-data class SamplePastInvoiceItem(
-    val id: String,
-    val title: String,
-    val project: String,
-    val amount: String,
-    val dueDate: String,
-    val notes: String,
-    val isPaid: Boolean
-)
-
 @Composable
 fun PastInvoicesMorphSheet(
     clientName: String = "Sarah Jenkins",
+    invoices: List<com.example.model.Invoice> = emptyList(),
     onClose: () -> Unit,
-    onInvoiceSelect: (SamplePastInvoiceItem) -> Unit,
+    onInvoiceSelect: (com.example.model.Invoice) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
@@ -4682,38 +5359,6 @@ fun PastInvoicesMorphSheet(
 
     val iconBg = if (colors.isDark) Color(0xFF243A1B) else Color(0xFFEAF4E8)
     val iconTint = if (colors.isDark) WiseLime else Color(0xFF335832)
-
-    val samplePastInvoices = remember {
-        listOf(
-            SamplePastInvoiceItem(
-                id = "inv_p1",
-                title = "Video editing — September",
-                project = "Brand Film Edit",
-                amount = "450.00",
-                dueDate = "Oct 15, 2026",
-                notes = "Net 15 payment terms",
-                isPaid = true
-            ),
-            SamplePastInvoiceItem(
-                id = "inv_p2",
-                title = "Mobile App Design Deposit",
-                project = "Mobile Redesign",
-                amount = "1,200.00",
-                dueDate = "Nov 01, 2026",
-                notes = "50% upfront project milestone",
-                isPaid = false
-            ),
-            SamplePastInvoiceItem(
-                id = "inv_p3",
-                title = "Brand Identity Assets",
-                project = "Brand Identity",
-                amount = "800.00",
-                dueDate = "Nov 10, 2026",
-                notes = "Logo suite and typography kit",
-                isPaid = false
-            )
-        )
-    }
 
     Column(
         modifier = modifier
@@ -4796,99 +5441,122 @@ fun PastInvoicesMorphSheet(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Invoices list
-        Column(
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            samplePastInvoices.forEach { inv ->
-                Surface(
-                    onClick = { onInvoiceSelect(inv) },
-                    shape = RoundedCornerShape(18.dp),
-                    color = colors.cardBackground,
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (colors.isDark) Color(0xFF2E322A) else Color(0xFFDFE3DA)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(76.dp)
-                        .testTag("past_invoice_item_${inv.id}")
-                ) {
-                    Row(
+        if (invoices.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.ReceiptLong,
+                    contentDescription = null,
+                    tint = colors.textSecondary.copy(alpha = 0.5f),
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "No invoices found",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Text(
+                    text = "Invoices created for $clientName will appear here",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary
+                )
+            }
+        } else {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                invoices.forEach { inv ->
+                    Surface(
+                        onClick = { onInvoiceSelect(inv) },
+                        shape = RoundedCornerShape(18.dp),
+                        color = colors.cardBackground,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (colors.isDark) Color(0xFF2E322A) else Color(0xFFDFE3DA)
+                        ),
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .fillMaxWidth()
+                            .testTag("past_invoice_item_${inv.id}")
                     ) {
-                        Box(
+                        Row(
                             modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(iconBg),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.ReceiptLong,
-                                contentDescription = null,
-                                tint = iconTint,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(iconBg),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.ReceiptLong,
+                                    contentDescription = null,
+                                    tint = iconTint,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
 
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = inv.title,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colors.textPrimary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "$${inv.amount} · Due ${inv.dueDate}",
-                                fontSize = 12.sp,
-                                color = colors.textSecondary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = inv.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "${inv.invoiceNumber} · Due ${inv.dueDate}",
+                                    fontSize = 12.sp,
+                                    color = colors.textSecondary
+                                )
+                            }
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
 
-                        Surface(
-                            shape = RoundedCornerShape(9999.dp),
-                            color = if (inv.isPaid) {
-                                if (colors.isDark) Color(0xFF243A1B) else Color(0xFFE2F6D5)
-                            } else {
-                                if (colors.isDark) Color(0xFF2E2D23) else Color(0xFFFAF6E6)
-                            },
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (inv.isPaid) {
-                                    if (colors.isDark) WiseLime.copy(alpha = 0.35f) else Color(0xFFC7ECB0)
-                                } else {
-                                    if (colors.isDark) Color(0xFF4A4428) else Color(0xFFEAE2C6)
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = inv.formatAmount(),
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colors.textPrimary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(9999.dp),
+                                    color = if (inv.isPaid) {
+                                        if (colors.isDark) Color(0xFF243A1B) else Color(0xFFE2F6D5)
+                                    } else {
+                                        if (colors.isDark) Color(0xFF382914) else Color(0xFFFFF3D6)
+                                    }
+                                ) {
+                                    Text(
+                                        text = if (inv.isPaid) "PAID" else "UNPAID",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (inv.isPaid) (if (colors.isDark) WiseLime else DarkGreen) else Color(0xFFB45309),
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
                                 }
-                            )
-                        ) {
-                            Text(
-                                text = if (inv.isPaid) "PAID" else "UNPAID",
-                                fontSize = 10.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (inv.isPaid) {
-                                    if (colors.isDark) WiseLime else DarkGreen
-                                } else {
-                                    if (colors.isDark) Color(0xFF163300) else Color(0xFF8A6200)
-                                },
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
+                            }
                         }
                     }
                 }

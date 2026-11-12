@@ -32,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -42,6 +43,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.components.WiseCard
 import com.example.components.WisePillButton
 import com.example.components.WiseStatusChip
@@ -54,6 +56,12 @@ import com.example.ui.theme.NearBlack
 import com.example.ui.theme.WiseLime
 import com.example.viewmodel.GlobalChatViewModel
 
+import com.example.components.DeleteProjectConfirmationDialog
+import com.example.components.ProjectOptionsMorphMenu
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+
 @Composable
 fun ProjectDetailsScreen(
     projectId: String,
@@ -63,12 +71,100 @@ fun ProjectDetailsScreen(
     modifier: Modifier = Modifier
 ) {
     val colors = GlobalChatTheme.colors
-    val project = viewModel.getProject(projectId) ?: return
+
+    LaunchedEffect(projectId) {
+        viewModel.loadProject(projectId)
+    }
+
+    val projectState by viewModel.selectedProject.collectAsState()
+    val isLoading by viewModel.isLoadingProject.collectAsState()
+    val isDeleting by viewModel.isDeletingProject.collectAsState()
+    val project = projectState ?: viewModel.getProject(projectId)
+
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var deleteErrorMessage by remember { mutableStateOf<String?>(null) }
+
+    if (showDeleteDialog && project != null) {
+        DeleteProjectConfirmationDialog(
+            projectTitle = project.title,
+            isDeleting = isDeleting,
+            errorMessage = deleteErrorMessage,
+            onConfirmDelete = {
+                deleteErrorMessage = null
+                viewModel.deleteProject(
+                    projectId = project.id,
+                    onSuccess = {
+                        showDeleteDialog = false
+                        onBack()
+                    },
+                    onError = { err ->
+                        deleteErrorMessage = err
+                    }
+                )
+            },
+            onDismiss = {
+                if (!isDeleting) showDeleteDialog = false
+            },
+            confirmTag = "confirm_delete_project_btn",
+            cancelTag = "cancel_delete_project_btn"
+        )
+    }
 
     Surface(
         modifier = modifier.fillMaxSize(),
         color = colors.screenBackground
     ) {
+        if (isLoading && project == null) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    color = WiseLime
+                )
+            }
+            return@Surface
+        }
+
+        if (project == null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = colors.textSecondary,
+                    modifier = Modifier.size(56.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Project unavailable",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.textPrimary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "This project could not be found or you do not have permission to view it.",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                WisePillButton(
+                    text = "Go back",
+                    onClick = onBack,
+                    isPrimary = true,
+                    testTag = "project_unavailable_back_btn"
+                )
+            }
+            return@Surface
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -79,7 +175,9 @@ fun ProjectDetailsScreen(
         ) {
             // Header
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .zIndex(20f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -94,13 +192,12 @@ fun ProjectDetailsScreen(
                     )
                 }
 
-                IconButton(onClick = { }) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = colors.textPrimary
-                    )
-                }
+                ProjectOptionsMorphMenu(
+                    projectTitle = project.title,
+                    onDeleteClick = { showDeleteDialog = true },
+                    buttonTag = "project_details_menu_btn",
+                    menuTag = "project_menu_delete_item"
+                )
             }
 
             Spacer(modifier = Modifier.height(14.dp))

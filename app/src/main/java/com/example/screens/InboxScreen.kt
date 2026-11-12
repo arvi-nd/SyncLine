@@ -68,11 +68,12 @@ fun InboxScreen(
     val activeFilter by viewModel.inboxFilter.collectAsState()
 
     var debugTapCount by remember { mutableIntStateOf(0) }
-    var selectedFilterTab by remember { mutableStateOf("All (12)") }
+    var selectedFilterIndex by remember { mutableIntStateOf(0) }
 
-    val filteredList = when (selectedFilterTab) {
-        "Unread (3)" -> inboxItems.filter { it.unreadCount > 0 }
-        "Projects (5)" -> inboxItems.take(2)
+    val unreadCount = inboxItems.count { it.unreadCount > 0 }
+    val filteredList = when (selectedFilterIndex) {
+        1 -> inboxItems.filter { it.unreadCount > 0 }
+        2 -> inboxItems.take(2)
         else -> inboxItems
     }
 
@@ -146,25 +147,26 @@ fun InboxScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // 2. Horizontal Quick Client Avatars Row (Sarah, Kenji, Elena, David)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        clients.take(4).forEach { client ->
-                            QuickAvatarItem(
-                                client = client,
-                                onClick = { onOpenChat(client.id) }
-                            )
+                    // 2. Horizontal Quick Client Avatars Row (Sarah, Kenji, Elena, David or added clients)
+                    if (clients.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            clients.take(4).forEach { client ->
+                                QuickAvatarItem(
+                                    client = client,
+                                    onClick = { onOpenChat(client.id) }
+                                )
+                            }
                         }
+                        Spacer(modifier = Modifier.height(16.dp))
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // 3. Filter Chips Row: All (12), Unread (3), Projects (5), Timezones
+                    // 3. Filter Chips Row: All, Unread, Projects, Timezones
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -173,27 +175,27 @@ fun InboxScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterPillChip(
-                            label = "All (12)",
-                            isSelected = selectedFilterTab == "All (12)",
-                            onClick = { selectedFilterTab = "All (12)" }
+                            label = "All (${inboxItems.size})",
+                            isSelected = selectedFilterIndex == 0,
+                            onClick = { selectedFilterIndex = 0 }
                         )
 
                         FilterPillChip(
-                            label = "Unread (3)",
-                            isSelected = selectedFilterTab == "Unread (3)",
-                            onClick = { selectedFilterTab = "Unread (3)" }
+                            label = "Unread ($unreadCount)",
+                            isSelected = selectedFilterIndex == 1,
+                            onClick = { selectedFilterIndex = 1 }
                         )
 
                         FilterPillChip(
-                            label = "Projects (5)",
-                            isSelected = selectedFilterTab == "Projects (5)",
-                            onClick = { selectedFilterTab = "Projects (5)" }
+                            label = "Projects",
+                            isSelected = selectedFilterIndex == 2,
+                            onClick = { selectedFilterIndex = 2 }
                         )
 
                         FilterPillChip(
                             label = "Timezones",
-                            isSelected = selectedFilterTab == "Timezones",
-                            onClick = { selectedFilterTab = "Timezones" }
+                            isSelected = selectedFilterIndex == 3,
+                            onClick = { selectedFilterIndex = 3 }
                         )
                     }
 
@@ -212,11 +214,42 @@ fun InboxScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(filteredList, key = { it.client.id }) { item ->
-                    ExactConversationCard(
-                        item = item,
-                        onClick = { onOpenChat(item.client.id) }
-                    )
+                if (filteredList.isEmpty()) {
+                    item {
+                        WiseCard(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 20.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "No conversations yet",
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colors.textPrimary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Add a client by username to start messaging",
+                                    fontSize = 13.sp,
+                                    color = colors.textSecondary,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(filteredList, key = { it.client.id }) { item ->
+                        ExactConversationCard(
+                            item = item,
+                            onClick = { onOpenChat(item.client.id) }
+                        )
+                    }
                 }
             }
         }

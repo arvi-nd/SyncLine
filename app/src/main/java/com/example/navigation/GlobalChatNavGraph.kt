@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -46,6 +47,10 @@ import com.example.screens.SignUpScreen
 import com.example.screens.SplashScreen
 import com.example.screens.TimezonesScreen
 import com.example.model.AttachmentType
+import com.example.model.Project
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.WorkOutline
 import com.example.ui.theme.GlobalChatTheme
 import com.example.viewmodel.GlobalChatViewModel
 
@@ -135,6 +140,23 @@ fun GlobalChatNavGraph(
             // Screen 3 / Main Screen with BottomNav: Home (Overview), Chat (Inbox & Conversation), Activity, Account
             composable(Screen.Main.route) {
                 var activeChatConversationId by remember { mutableStateOf<String?>(null) }
+                val userProjects by viewModel.projects.collectAsStateWithLifecycle()
+                val userMeetings by viewModel.meetings.collectAsStateWithLifecycle()
+                val userInvoices by viewModel.invoices.collectAsStateWithLifecycle()
+                val mappedProjects = remember(userProjects) {
+                    userProjects.map { p: Project ->
+                        com.example.components.ProjectItemData(
+                            id = p.id,
+                            title = p.title,
+                            subtitle = "Due ${p.dueDate} · ${p.progress}% complete",
+                            icon = androidx.compose.material.icons.Icons.Outlined.WorkOutline,
+                            iconBgColorLight = androidx.compose.ui.graphics.Color(p.cardColorHexLight),
+                            iconBgColorDark = androidx.compose.ui.graphics.Color(p.cardColorHexDark),
+                            iconTintLight = com.example.ui.theme.DarkGreen,
+                            iconTintDark = com.example.ui.theme.WiseLime
+                        )
+                    }
+                }
 
                 if (activeChatConversationId != null) {
                     BackHandler {
@@ -159,6 +181,52 @@ fun GlobalChatNavGraph(
                             onChatTextChange = { viewModel.setChatDraft(it) },
                             onSendMessage = {
                                 viewModel.sendCurrentMessage(activeChatConversationId ?: activeClientId)
+                            },
+                            projectsList = mappedProjects,
+                            meetingsList = userMeetings,
+                            invoicesList = userInvoices,
+                            clientName = (activeChatConversationId ?: activeClientId).let { cid -> viewModel.getClient(cid)?.name ?: "Sarah Jenkins" },
+                            clientUid = activeChatConversationId ?: activeClientId,
+                            onScheduleMeetingDirect = { title, date, time, duration, durationMinutes, notes, scheduledAtMillis, attemptMeetingId, onSuccess, onError ->
+                                val scheduledTimestamp = if (scheduledAtMillis != null) {
+                                    com.google.firebase.Timestamp(java.util.Date(scheduledAtMillis))
+                                } else null
+                                val targetClient = (activeChatConversationId ?: activeClientId).let { cid -> viewModel.getClient(cid) }
+                                viewModel.scheduleMeeting(
+                                    meetingId = attemptMeetingId,
+                                    title = title,
+                                    clientName = targetClient?.name ?: "Sarah Jenkins",
+                                    clientUid = activeChatConversationId ?: activeClientId,
+                                    dateString = date,
+                                    time = time,
+                                    duration = duration,
+                                    durationMinutes = durationMinutes,
+                                    scheduledAt = scheduledTimestamp,
+                                    notes = notes,
+                                    onSuccess = { onSuccess() },
+                                    onError = onError
+                                )
+                            },
+                            onCreateInvoiceDirect = { title, cUid, cName, pId, pName, amt, currCode, dDate, nts, attemptId, onSuccess, onError ->
+                                val convId = activeChatConversationId ?: activeClientId
+                                val targetClient = viewModel.getClient(convId)
+                                val resolvedClientUid = if (cUid.isNotBlank() && cUid != "c1") cUid else (targetClient?.id ?: convId)
+                                val resolvedClientName = if (cName.isNotBlank() && cName != "Sarah Jenkins") cName else (targetClient?.name ?: "Sarah Jenkins")
+                                viewModel.createAndShareInvoice(
+                                    conversationId = convId,
+                                    title = title,
+                                    clientUid = resolvedClientUid,
+                                    clientName = resolvedClientName,
+                                    projectId = pId,
+                                    projectName = pName,
+                                    amount = amt,
+                                    currencyCode = currCode,
+                                    dueDate = dDate,
+                                    notes = nts,
+                                    attemptId = attemptId,
+                                    onSuccess = { onSuccess() },
+                                    onError = onError
+                                )
                             },
                             onNavigate = { destination ->
                                 if (destination == BottomNavDestination.CHAT && currentBottomTab == BottomNavDestination.CHAT && activeChatConversationId != null) {
@@ -201,33 +269,32 @@ fun GlobalChatNavGraph(
                                     navController.navigate(Screen.ScheduleMessage.createRoute(clientId))
                                 } else if (actionId.startsWith("project_created:")) {
                                     val payload = actionId.removePrefix("project_created:")
-                                    val parts = payload.split(":")
+                                    val parts = payload.split(":::")
                                     val projName = parts.getOrNull(0)?.ifBlank { "New Project" } ?: "New Project"
-                                    val colorLight = parts.getOrNull(1)?.toLongOrNull() ?: 0xFFE2F6D5L
-                                    val colorDark = parts.getOrNull(2)?.toLongOrNull() ?: 0xFF243A1BL
+                                    val dueDate = parts.getOrNull(1)?.ifBlank { "Nov 15" } ?: "Nov 15"
+                                    val colorLight = parts.getOrNull(2)?.toLongOrNull() ?: 0xFFE2F6D5L
+                                    val colorDark = parts.getOrNull(3)?.toLongOrNull() ?: 0xFF243A1BL
+                                    val tasksStr = parts.getOrNull(4) ?: ""
+                                    val tasksList = if (tasksStr.isNotBlank()) tasksStr.split("|||") else emptyList()
                                     val targetClient = viewModel.getClient(activeChatConversationId ?: activeClientId)
-                                    viewModel.addProjectAndSendToChat(
+                                    viewModel.createAndShareProject(
                                         conversationId = activeChatConversationId ?: activeClientId,
-                                        title = projName,
+                                        clientUid = targetClient?.id ?: "",
                                         clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        colorHexLight = colorLight,
-                                        colorHexDark = colorDark
+                                        title = projName,
+                                        dueDate = dueDate,
+                                        tasks = tasksList,
+                                        shouldShareInChat = false,
+                                        onSuccess = { createdProj ->
+                                            navController.navigate(Screen.ProjectDetails.createRoute(createdProj.id))
+                                        }
                                     )
                                 } else if (actionId.startsWith("project_selected:")) {
-                                    val projName = actionId.removePrefix("project_selected:")
-                                    val (colorLight, colorDark) = when (projName) {
-                                        "Brand Identity" -> Pair(0xFFE1F0FAL, 0xFF1E2F3CL)
-                                        "Social Media Reels" -> Pair(0xFFFCEBD9L, 0xFF3B2B1EL)
-                                        else -> Pair(0xFFE2F6D5L, 0xFF243A1BL)
+                                    val payload = actionId.removePrefix("project_selected:")
+                                    val matched = viewModel.projects.value.find { it.id == payload || it.title == payload }
+                                    if (matched != null) {
+                                        navController.navigate(Screen.ProjectDetails.createRoute(matched.id))
                                     }
-                                    val targetClient = viewModel.getClient(activeChatConversationId ?: activeClientId)
-                                    viewModel.addProjectAndSendToChat(
-                                        conversationId = activeChatConversationId ?: activeClientId,
-                                        title = projName,
-                                        clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        colorHexLight = colorLight,
-                                        colorHexDark = colorDark
-                                    )
                                 } else if (actionId.startsWith("attach_option:")) {
                                     val opt = actionId.removePrefix("attach_option:")
                                     val attachText = when (opt) {
@@ -282,64 +349,35 @@ fun GlobalChatNavGraph(
                                         title = linkTitle,
                                         url = formattedUrl
                                     )
-                                } else if (actionId == "schedule_meeting") {
-                                    val targetClient = viewModel.getClient(activeChatConversationId ?: activeClientId)
-                                    viewModel.addMeetingAndSendToChat(
-                                        conversationId = activeChatConversationId ?: activeClientId,
-                                        title = "Project Sync",
-                                        clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        dateString = "Tomorrow",
-                                        time = "3:00 PM",
-                                        duration = "30 min",
-                                        status = "Confirmed"
-                                    )
-                                } else if (actionId.startsWith("meeting_scheduled:")) {
-                                    val payload = actionId.removePrefix("meeting_scheduled:")
-                                    val parts = payload.split(":")
-                                    val mTitle = parts.getOrNull(0)?.ifBlank { "Project review" } ?: "Project review"
-                                    val mDate = parts.getOrNull(1)?.ifBlank { "Oct 28" } ?: "Oct 28"
-                                    val mTime = parts.getOrNull(2)?.ifBlank { "10:00 AM" } ?: "10:00 AM"
-                                    val mDuration = parts.getOrNull(3)?.ifBlank { "30 min" } ?: "30 min"
-                                    val mNotes = parts.getOrNull(4)?.takeIf { it.isNotBlank() }
-                                    val targetClient = viewModel.getClient(activeChatConversationId ?: activeClientId)
-                                    viewModel.addMeetingAndSendToChat(
-                                        conversationId = activeChatConversationId ?: activeClientId,
-                                        title = mTitle,
-                                        clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        dateString = mDate,
-                                        time = mTime,
-                                        duration = mDuration,
-                                        status = "Confirmed",
-                                        notes = mNotes
-                                    )
                                 } else if (actionId.startsWith("invoice_created:")) {
                                     val payload = actionId.removePrefix("invoice_created:")
                                     val parts = payload.split(":::")
                                     val invTitle = parts.getOrNull(0)?.ifBlank { "Video editing — October" } ?: "Video editing — October"
                                     val invProject = parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "Select project (optional)" }
-                                    val rawAmount = parts.getOrNull(2)?.replace("$", "")?.replace(",", "")?.trim() ?: "1250.00"
-                                    val invAmount = rawAmount.toDoubleOrNull() ?: 1250.0
-                                    val invDueDate = parts.getOrNull(3)?.ifBlank { "Oct 31, 2026" } ?: "Oct 31, 2026"
-                                    val invNotes = parts.getOrNull(4)?.takeIf { it.isNotBlank() }
-                                    val targetClient = viewModel.getClient(activeChatConversationId ?: activeClientId)
-                                    viewModel.addInvoiceAndSendToChat(
-                                        conversationId = activeChatConversationId ?: activeClientId,
+                                    val rawAmount = parts.getOrNull(2)?.replace("₹", "")?.replace("$", "")?.replace("£", "")?.replace(",", "")?.trim() ?: "500.00"
+                                    val invAmount = rawAmount.toDoubleOrNull() ?: 500.0
+                                    val currencyCode = parts.getOrNull(3)?.ifBlank { "INR" } ?: "INR"
+                                    val invDueDate = parts.getOrNull(4)?.ifBlank { "Oct 31, 2026" } ?: "Oct 31, 2026"
+                                    val invNotes = parts.getOrNull(5)?.takeIf { it.isNotBlank() }
+                                    val attemptId = parts.getOrNull(6)?.takeIf { it.isNotBlank() }
+                                    val convId = activeChatConversationId ?: activeClientId
+                                    val targetClient = viewModel.getClient(convId)
+                                    val clientUid = targetClient?.id ?: convId
+                                    viewModel.createAndShareInvoice(
+                                        conversationId = convId,
                                         title = invTitle,
+                                        clientUid = clientUid,
                                         clientName = targetClient?.name ?: "Sarah Jenkins",
+                                        projectId = null,
                                         projectName = invProject,
                                         amount = invAmount,
+                                        currencyCode = currencyCode,
                                         dueDate = invDueDate,
-                                        notes = invNotes
-                                    )
-                                } else if (actionId == "view_meetings") {
-                                    val targetClient = viewModel.getClient(activeChatConversationId ?: activeClientId)
-                                    viewModel.sendMessage(
-                                        activeChatConversationId ?: activeClientId,
-                                        "📅 Upcoming scheduled meetings with ${targetClient?.name ?: "Sarah Jenkins"}:\n• Design Review - Tomorrow, 3:00 PM EST\n• Milestone Checkpoint - Friday, 11:00 AM EST"
+                                        notes = invNotes,
+                                        attemptId = attemptId
                                     )
                                 }
-                            },
-                            clientName = viewModel.getClient(activeChatConversationId ?: activeClientId)?.name ?: "Sarah Jenkins"
+                            }
                         )
                     }
                 ) { innerPadding ->
@@ -430,9 +468,29 @@ fun GlobalChatNavGraph(
                 arguments = listOf(navArgument("clientId") { type = NavType.StringType })
             ) { backStackEntry ->
                 val clientId = backStackEntry.arguments?.getString("clientId") ?: "c1"
-                viewModel.setActiveChatClient(clientId)
+                val userProjects by viewModel.projects.collectAsStateWithLifecycle()
+                val userMeetings by viewModel.meetings.collectAsStateWithLifecycle()
+                val targetClient = viewModel.getClient(clientId)
+                val mappedProjects = remember(userProjects) {
+                    userProjects.map { p: Project ->
+                        com.example.components.ProjectItemData(
+                            id = p.id,
+                            title = p.title,
+                            subtitle = "Due ${p.dueDate} · ${p.progress}% complete",
+                            icon = androidx.compose.material.icons.Icons.Outlined.WorkOutline,
+                            iconBgColorLight = androidx.compose.ui.graphics.Color(p.cardColorHexLight),
+                            iconBgColorDark = androidx.compose.ui.graphics.Color(p.cardColorHexDark),
+                            iconTintLight = com.example.ui.theme.DarkGreen,
+                            iconTintDark = com.example.ui.theme.WiseLime
+                        )
+                    }
+                }
+                LaunchedEffect(clientId) {
+                    viewModel.setActiveChatClient(clientId)
+                }
                 Scaffold(
                     containerColor = GlobalChatTheme.colors.screenBackground,
+                    contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
                     bottomBar = {
                         BottomNavBar(
                             currentDestination = BottomNavDestination.CHAT,
@@ -440,6 +498,48 @@ fun GlobalChatNavGraph(
                             chatText = chatDraft,
                             onChatTextChange = { viewModel.setChatDraft(it) },
                             onSendMessage = { viewModel.sendCurrentMessage(clientId) },
+                            projectsList = mappedProjects,
+                            meetingsList = userMeetings,
+                            clientName = targetClient?.name ?: "Sarah Jenkins",
+                            clientUid = clientId,
+                            onScheduleMeetingDirect = { title, date, time, duration, durationMinutes, notes, scheduledAtMillis, attemptMeetingId, onSuccess, onError ->
+                                val scheduledTimestamp = if (scheduledAtMillis != null) {
+                                    com.google.firebase.Timestamp(java.util.Date(scheduledAtMillis))
+                                } else null
+                                viewModel.scheduleMeeting(
+                                    meetingId = attemptMeetingId,
+                                    title = title,
+                                    clientName = targetClient?.name ?: "Sarah Jenkins",
+                                    clientUid = clientId,
+                                    dateString = date,
+                                    time = time,
+                                    duration = duration,
+                                    durationMinutes = durationMinutes,
+                                    scheduledAt = scheduledTimestamp,
+                                    notes = notes,
+                                    onSuccess = { onSuccess() },
+                                    onError = onError
+                                )
+                            },
+                            onCreateInvoiceDirect = { title, cUid, cName, pId, pName, amt, currCode, dDate, nts, attemptId, onSuccess, onError ->
+                                val resolvedClientUid = if (cUid.isNotBlank() && cUid != "c1") cUid else (targetClient?.id ?: clientId)
+                                val resolvedClientName = if (cName.isNotBlank() && cName != "Sarah Jenkins") cName else (targetClient?.name ?: "Sarah Jenkins")
+                                viewModel.createAndShareInvoice(
+                                    conversationId = clientId,
+                                    title = title,
+                                    clientUid = resolvedClientUid,
+                                    clientName = resolvedClientName,
+                                    projectId = pId,
+                                    projectName = pName,
+                                    amount = amt,
+                                    currencyCode = currCode,
+                                    dueDate = dDate,
+                                    notes = nts,
+                                    attemptId = attemptId,
+                                    onSuccess = { onSuccess() },
+                                    onError = onError
+                                )
+                            },
                             onNavigate = { destination ->
                                 if (destination == BottomNavDestination.HOME) {
                                     navController.popBackStack()
@@ -469,33 +569,32 @@ fun GlobalChatNavGraph(
                             onActionPillClick = { actionId ->
                                 if (actionId.startsWith("project_created:")) {
                                     val payload = actionId.removePrefix("project_created:")
-                                    val parts = payload.split(":")
+                                    val parts = payload.split(":::")
                                     val projName = parts.getOrNull(0)?.ifBlank { "New Project" } ?: "New Project"
-                                    val colorLight = parts.getOrNull(1)?.toLongOrNull() ?: 0xFFE2F6D5L
-                                    val colorDark = parts.getOrNull(2)?.toLongOrNull() ?: 0xFF243A1BL
+                                    val dueDate = parts.getOrNull(1)?.ifBlank { "Nov 15" } ?: "Nov 15"
+                                    val colorLight = parts.getOrNull(2)?.toLongOrNull() ?: 0xFFE2F6D5L
+                                    val colorDark = parts.getOrNull(3)?.toLongOrNull() ?: 0xFF243A1BL
+                                    val tasksStr = parts.getOrNull(4) ?: ""
+                                    val tasksList = if (tasksStr.isNotBlank()) tasksStr.split("|||") else emptyList()
                                     val targetClient = viewModel.getClient(clientId)
-                                    viewModel.addProjectAndSendToChat(
+                                    viewModel.createAndShareProject(
                                         conversationId = clientId,
-                                        title = projName,
+                                        clientUid = targetClient?.id ?: "",
                                         clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        colorHexLight = colorLight,
-                                        colorHexDark = colorDark
+                                        title = projName,
+                                        dueDate = dueDate,
+                                        tasks = tasksList,
+                                        shouldShareInChat = false,
+                                        onSuccess = { createdProj ->
+                                            navController.navigate(Screen.ProjectDetails.createRoute(createdProj.id))
+                                        }
                                     )
                                 } else if (actionId.startsWith("project_selected:")) {
-                                    val projName = actionId.removePrefix("project_selected:")
-                                    val (colorLight, colorDark) = when (projName) {
-                                        "Brand Identity" -> Pair(0xFFE1F0FAL, 0xFF1E2F3CL)
-                                        "Social Media Reels" -> Pair(0xFFFCEBD9L, 0xFF3B2B1EL)
-                                        else -> Pair(0xFFE2F6D5L, 0xFF243A1BL)
+                                    val payload = actionId.removePrefix("project_selected:")
+                                    val matched = viewModel.projects.value.find { it.id == payload || it.title == payload }
+                                    if (matched != null) {
+                                        navController.navigate(Screen.ProjectDetails.createRoute(matched.id))
                                     }
-                                    val targetClient = viewModel.getClient(clientId)
-                                    viewModel.addProjectAndSendToChat(
-                                        conversationId = clientId,
-                                        title = projName,
-                                        clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        colorHexLight = colorLight,
-                                        colorHexDark = colorDark
-                                    )
                                 } else if (actionId.startsWith("attach_option:")) {
                                     val opt = actionId.removePrefix("attach_option:")
                                     val attachText = when (opt) {
@@ -550,64 +649,34 @@ fun GlobalChatNavGraph(
                                         title = linkTitle,
                                         url = formattedUrl
                                     )
-                                } else if (actionId == "schedule_meeting") {
-                                    val targetClient = viewModel.getClient(clientId)
-                                    viewModel.addMeetingAndSendToChat(
-                                        conversationId = clientId,
-                                        title = "Project Sync",
-                                        clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        dateString = "Tomorrow",
-                                        time = "3:00 PM",
-                                        duration = "30 min",
-                                        status = "Confirmed"
-                                    )
-                                } else if (actionId.startsWith("meeting_scheduled:")) {
-                                    val payload = actionId.removePrefix("meeting_scheduled:")
-                                    val parts = payload.split(":")
-                                    val mTitle = parts.getOrNull(0)?.ifBlank { "Project review" } ?: "Project review"
-                                    val mDate = parts.getOrNull(1)?.ifBlank { "Oct 28" } ?: "Oct 28"
-                                    val mTime = parts.getOrNull(2)?.ifBlank { "10:00 AM" } ?: "10:00 AM"
-                                    val mDuration = parts.getOrNull(3)?.ifBlank { "30 min" } ?: "30 min"
-                                    val mNotes = parts.getOrNull(4)?.takeIf { it.isNotBlank() }
-                                    val targetClient = viewModel.getClient(clientId)
-                                    viewModel.addMeetingAndSendToChat(
-                                        conversationId = clientId,
-                                        title = mTitle,
-                                        clientName = targetClient?.name ?: "Sarah Jenkins",
-                                        dateString = mDate,
-                                        time = mTime,
-                                        duration = mDuration,
-                                        status = "Confirmed",
-                                        notes = mNotes
-                                    )
                                 } else if (actionId.startsWith("invoice_created:")) {
                                     val payload = actionId.removePrefix("invoice_created:")
                                     val parts = payload.split(":::")
                                     val invTitle = parts.getOrNull(0)?.ifBlank { "Video editing — October" } ?: "Video editing — October"
                                     val invProject = parts.getOrNull(1)?.takeIf { it.isNotBlank() && it != "Select project (optional)" }
-                                    val rawAmount = parts.getOrNull(2)?.replace("$", "")?.replace(",", "")?.trim() ?: "1250.00"
-                                    val invAmount = rawAmount.toDoubleOrNull() ?: 1250.0
-                                    val invDueDate = parts.getOrNull(3)?.ifBlank { "Oct 31, 2026" } ?: "Oct 31, 2026"
-                                    val invNotes = parts.getOrNull(4)?.takeIf { it.isNotBlank() }
+                                    val rawAmount = parts.getOrNull(2)?.replace("₹", "")?.replace("$", "")?.replace("£", "")?.replace(",", "")?.trim() ?: "500.00"
+                                    val invAmount = rawAmount.toDoubleOrNull() ?: 500.0
+                                    val currencyCode = parts.getOrNull(3)?.ifBlank { "INR" } ?: "INR"
+                                    val invDueDate = parts.getOrNull(4)?.ifBlank { "Oct 31, 2026" } ?: "Oct 31, 2026"
+                                    val invNotes = parts.getOrNull(5)?.takeIf { it.isNotBlank() }
+                                    val attemptId = parts.getOrNull(6)?.takeIf { it.isNotBlank() }
                                     val targetClient = viewModel.getClient(clientId)
-                                    viewModel.addInvoiceAndSendToChat(
+                                    val clientUid = targetClient?.id ?: clientId
+                                    viewModel.createAndShareInvoice(
                                         conversationId = clientId,
                                         title = invTitle,
+                                        clientUid = clientUid,
                                         clientName = targetClient?.name ?: "Sarah Jenkins",
+                                        projectId = null,
                                         projectName = invProject,
                                         amount = invAmount,
+                                        currencyCode = currencyCode,
                                         dueDate = invDueDate,
-                                        notes = invNotes
-                                    )
-                                } else if (actionId == "view_meetings") {
-                                    val targetClient = viewModel.getClient(clientId)
-                                    viewModel.sendMessage(
-                                        clientId,
-                                        "📅 Upcoming scheduled meetings with ${targetClient?.name ?: "Sarah Jenkins"}:\n• Design Review - Tomorrow, 3:00 PM EST\n• Milestone Checkpoint - Friday, 11:00 AM EST"
+                                        notes = invNotes,
+                                        attemptId = attemptId
                                     )
                                 }
-                            },
-                            clientName = viewModel.getClient(clientId)?.name ?: "Sarah Jenkins"
+                            }
                         )
                     }
                 ) { innerPadding ->

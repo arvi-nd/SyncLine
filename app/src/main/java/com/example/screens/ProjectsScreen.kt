@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.components.WiseCard
 import com.example.components.WiseFilterChip
 import com.example.components.WiseStatusChip
@@ -50,6 +51,12 @@ import com.example.ui.theme.WiseLime
 import com.example.viewmodel.GlobalChatViewModel
 import com.example.viewmodel.ProjectsFilter
 
+import com.example.components.DeleteProjectConfirmationDialog
+import com.example.components.ProjectOptionsMorphMenu
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+
 @Composable
 fun ProjectsScreen(
     viewModel: GlobalChatViewModel,
@@ -60,11 +67,40 @@ fun ProjectsScreen(
     val colors = GlobalChatTheme.colors
     val projects by viewModel.projects.collectAsState()
     val filter by viewModel.projectsFilter.collectAsState()
+    val isDeleting by viewModel.isDeletingProject.collectAsState()
+    var projectToDelete by remember { mutableStateOf<Project?>(null) }
+    var deleteErrorMsg by remember { mutableStateOf<String?>(null) }
 
     val filteredProjects = when (filter) {
         ProjectsFilter.ACTIVE -> projects.filter { it.status == ProjectStatus.IN_PROGRESS || it.status == ProjectStatus.PLANNING }
         ProjectsFilter.COMPLETED -> projects.filter { it.status == ProjectStatus.COMPLETED }
         ProjectsFilter.ALL -> projects
+    }
+
+    if (projectToDelete != null) {
+        val proj = projectToDelete!!
+        DeleteProjectConfirmationDialog(
+            projectTitle = proj.title,
+            isDeleting = isDeleting,
+            errorMessage = deleteErrorMsg,
+            onConfirmDelete = {
+                deleteErrorMsg = null
+                viewModel.deleteProject(
+                    projectId = proj.id,
+                    onSuccess = {
+                        projectToDelete = null
+                    },
+                    onError = { err ->
+                        deleteErrorMsg = err
+                    }
+                )
+            },
+            onDismiss = {
+                if (!isDeleting) projectToDelete = null
+            },
+            confirmTag = "confirm_delete_project_list_btn",
+            cancelTag = "cancel_delete_project_list_btn"
+        )
     }
 
     Surface(
@@ -135,15 +171,92 @@ fun ProjectsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Project Cards
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                items(filteredProjects, key = { it.id }) { project ->
-                    ProjectCardItem(
-                        project = project,
-                        onClick = { onOpenProjectDetails(project.id) }
-                    )
+            if (filteredProjects.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(bottom = 60.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(68.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (colors.isDark) Color(0xFF243A1B) else Color(0xFFE2F6D5)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = if (colors.isDark) WiseLime else DarkGreen,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Text(
+                            text = "No projects yet",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colors.textPrimary
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = "Create a new project to collaborate, track milestones, and share task progress with your client.",
+                            fontSize = 13.5.sp,
+                            color = colors.textSecondary,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            lineHeight = 18.sp
+                        )
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Surface(
+                            onClick = onOpenCreate,
+                            shape = RoundedCornerShape(9999.dp),
+                            color = WiseLime,
+                            modifier = Modifier.testTag("empty_state_create_project_btn")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = null,
+                                    tint = DarkGreen,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Create Project",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = DarkGreen
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    items(filteredProjects, key = { it.id }) { project ->
+                        ProjectCardItem(
+                            project = project,
+                            onClick = { onOpenProjectDetails(project.id) },
+                            onDelete = { projectToDelete = project }
+                        )
+                    }
                 }
             }
         }
@@ -153,7 +266,8 @@ fun ProjectsScreen(
 @Composable
 fun ProjectCardItem(
     project: Project,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     val colors = GlobalChatTheme.colors
 
@@ -166,7 +280,9 @@ fun ProjectCardItem(
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .zIndex(10f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -201,12 +317,21 @@ fun ProjectCardItem(
                     )
                 }
 
-                Icon(
-                    imageVector = Icons.Default.FileDownload,
-                    contentDescription = "Files",
-                    tint = colors.textSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
+                if (onDelete != null) {
+                    ProjectOptionsMorphMenu(
+                        projectTitle = project.title,
+                        onDeleteClick = onDelete,
+                        buttonTag = "project_card_menu_${project.id}",
+                        menuTag = "project_card_delete_item_${project.id}"
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.FileDownload,
+                        contentDescription = "Files",
+                        tint = colors.textSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

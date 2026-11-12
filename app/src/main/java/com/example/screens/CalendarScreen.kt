@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.components.WiseCard
 import com.example.model.Meeting
+import com.example.model.getDisplayTime
+import com.example.model.getDisplayDate
 import com.example.ui.theme.DarkGreen
 import com.example.ui.theme.GlobalChatTheme
 import com.example.ui.theme.LightMint
@@ -150,9 +153,13 @@ fun CalendarScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Date Subheading
+                val formattedToday = remember {
+                    java.time.LocalDate.now().format(
+                        java.time.format.DateTimeFormatter.ofPattern("EEEE, MMM d", java.util.Locale.US)
+                    )
+                }
                 Text(
-                    text = "Today, May 28",
+                    text = formattedToday,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = colors.textPrimary
@@ -160,13 +167,57 @@ fun CalendarScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Meetings List
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(meetings, key = { it.id }) { meeting ->
-                        MeetingCard(meeting = meeting)
+                if (meetings.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(vertical = 32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(if (colors.isDark) Color(0xFF243A1B) else Color(0xFFEAF4E8)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.CalendarToday,
+                                    contentDescription = null,
+                                    tint = if (colors.isDark) WiseLime else DarkGreen,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "No scheduled meetings",
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colors.textPrimary
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "When you schedule a meeting with a client, it will appear here in real time.",
+                                fontSize = 13.sp,
+                                color = colors.textSecondary,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 32.dp)
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(meetings, key = { it.id }) { meeting ->
+                            MeetingCard(meeting = meeting)
+                        }
                     }
                 }
             }
@@ -204,7 +255,7 @@ fun MeetingCard(meeting: Meeting) {
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "${meeting.time} · ${meeting.duration}",
+                text = "${meeting.getDisplayTime()} · ${meeting.duration}",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = colors.textSecondary

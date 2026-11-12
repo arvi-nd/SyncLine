@@ -165,7 +165,8 @@ fun ChatRequestCard(
     onDecline: () -> Unit
 ) {
     val colors = GlobalChatTheme.colors
-    val isIncoming = request.targetUid == currentUid
+    val isIncoming = request.targetUid.equals(currentUid, ignoreCase = true) || (currentUid.isNotBlank() && request.senderUid != currentUid)
+    val isPending = request.status.equals("PENDING", ignoreCase = true)
 
     val titleText = if (isIncoming) {
         "Chat request from ${request.senderDisplayName.ifBlank { request.senderUsername }}"
@@ -233,19 +234,20 @@ fun ChatRequestCard(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 // Status Chip
-                val chipText = when (request.status) {
+                val statusUpper = request.status.uppercase()
+                val chipText = when (statusUpper) {
                     "PENDING" -> if (isIncoming) "Pending" else "Sent"
                     "ACCEPTED" -> "Accepted"
                     "DECLINED" -> "Declined"
                     else -> request.status
                 }
-                val chipBg = when (request.status) {
+                val chipBg = when (statusUpper) {
                     "PENDING" -> if (isIncoming) WiseLime.copy(alpha = 0.25f) else Color(0xFFFFF3C4)
                     "ACCEPTED" -> Color(0xFFE2F6D5)
                     "DECLINED" -> Color(0xFFFDE8E8)
                     else -> colors.cardBorder.copy(alpha = 0.3f)
                 }
-                val chipTextCol = when (request.status) {
+                val chipTextCol = when (statusUpper) {
                     "PENDING" -> if (isIncoming) DarkGreen else Color(0xFF8C5800)
                     "ACCEPTED" -> DarkGreen
                     "DECLINED" -> Color(0xFFD03238)
@@ -268,7 +270,7 @@ fun ChatRequestCard(
             }
 
             // Accept & Decline buttons for incoming pending requests
-            if (isIncoming && request.status == "PENDING") {
+            if (isIncoming && isPending) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

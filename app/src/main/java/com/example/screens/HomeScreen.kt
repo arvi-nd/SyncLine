@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import com.example.components.WiseCard
 import com.example.model.Client
 import com.example.model.Meeting
+import com.example.model.getDisplayTime
 import com.example.model.Project
 import com.example.ui.theme.DarkGreen
 import com.example.ui.theme.DisplayBlackFontFamily
@@ -292,12 +293,62 @@ fun HomeScreen(
                 )
             }
 
-            items(meetings) { meeting ->
-                HomeMeetingCard(
-                    meeting = meeting,
-                    onClick = onOpenCalendar,
-                    testTag = "home_meeting_card_${meeting.id}"
-                )
+            if (meetings.isEmpty()) {
+                item {
+                    WiseCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 4.dp),
+                        onClick = onOpenCalendar
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(if (colors.isDark) Color(0xFF242721) else Color(0xFFF0F4EC)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarToday,
+                                    contentDescription = null,
+                                    tint = colors.textSecondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "No upcoming meetings",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.textPrimary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Tap to view calendar",
+                                    fontSize = 12.sp,
+                                    color = colors.textSecondary
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(meetings) { meeting ->
+                    HomeMeetingCard(
+                        meeting = meeting,
+                        onClick = onOpenCalendar,
+                        testTag = "home_meeting_card_${meeting.id}"
+                    )
+                }
             }
 
             // 6. Section: Global Timezones Glance
@@ -757,7 +808,7 @@ private fun HomeMeetingCard(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${meeting.time} · ${meeting.duration} · Google Meet",
+                    text = "${meeting.getDisplayTime()} · ${meeting.duration} · Google Meet",
                     fontSize = 12.5.sp,
                     color = colors.textSecondary
                 )
